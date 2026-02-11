@@ -1,0 +1,192 @@
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: target-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 10.42.0.0/16
+    services:
+      cidrBlocks:
+        - 10.43.0.0/16
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    kind: KThreesControlPlane
+    name: target-cluster-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: target-cluster
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: target-cluster
+  namespace: default
+spec:
+  controlPlaneServiceTemplate:
+    spec:
+      type: LoadBalancer
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KThreesControlPlane
+metadata:
+  name: target-cluster-control-plane
+  namespace: default
+spec:
+  replicas: 1
+  version: v1.31.4+k3s1
+  kthreesConfigSpec:
+    serverConfig:
+      disableComponents:
+        - servicelb
+        - traefik
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: KubevirtMachineTemplate
+      name: target-cluster-cp
+      namespace: default
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: target-cluster-cp
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: ssh
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: 2
+                memory:
+                  guest: 4Gi
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - masquerade: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - dataVolume:
+                    name: systemdisk-dv
+                  name: systemdisk
+          dataVolumeTemplates:
+            - metadata:
+                name: systemdisk-dv
+              spec:
+                pvc:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 17Gi
+                source:
+                  pvc:
+                    namespace: default
+                    name: ubuntu-noble-dv
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: target-cluster-workers
+  namespace: default
+spec:
+  clusterName: target-cluster
+  replicas: 1
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: target-cluster
+      version: v1.31.4+k3s1
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+          kind: KThreesConfigTemplate
+          name: target-cluster-workers
+          namespace: default
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: target-cluster-workers
+        namespace: default
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KThreesConfigTemplate
+metadata:
+  name: target-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      agentConfig: {}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: target-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: ssh
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: 2
+                memory:
+                  guest: 4Gi
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - masquerade: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - dataVolume:
+                    name: systemdisk-dv
+                  name: systemdisk
+          dataVolumeTemplates:
+            - metadata:
+                name: systemdisk-dv
+              spec:
+                pvc:
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: 17Gi
+                source:
+                  pvc:
+                    namespace: default
+                    name: ubuntu-noble-dv
