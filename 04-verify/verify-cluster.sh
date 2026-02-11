@@ -2,7 +2,8 @@
 set -euo pipefail
 
 CLUSTER_NAME="${1:-target-cluster}"
-KUBECONFIG_FILE="/tmp/${CLUSTER_NAME}-kubeconfig"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KUBECONFIG_FILE="${SCRIPT_DIR}/../${CLUSTER_NAME}-kubeconfig"
 
 echo "==> Checking cluster status..."
 kubectl get cluster "${CLUSTER_NAME}"
