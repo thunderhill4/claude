@@ -52,6 +52,29 @@ spec:
         - 172.18.255.215
     preK3sCommands:
       - |
+        # Fix network: write systemd-networkd config matching by interface name
+        # (cloud-init netplan matches by MAC which can change on VM restart)
+        mkdir -p /etc/systemd/network
+        cat > /etc/systemd/network/10-enp1s0.network << 'NETEOF'
+        [Match]
+        Name=enp1s0
+
+        [Network]
+        DHCP=yes
+        LinkLocalAddressing=ipv6
+
+        [DHCP]
+        RouteMetric=100
+        UseMTU=true
+        NETEOF
+        sed -i 's/^        //' /etc/systemd/network/10-enp1s0.network
+        systemctl restart systemd-networkd
+        # Wait for DHCP lease
+        for i in $(seq 1 30); do
+          ip addr show enp1s0 | grep -q 'inet ' && break
+          sleep 1
+        done
+      - |
         useradd -m -s /bin/bash -G sudo ubuntu 2>/dev/null || true
         echo 'ubuntu:ubuntu' | chpasswd
         mkdir -p /home/ubuntu/.ssh
@@ -157,6 +180,29 @@ spec:
     spec:
       agentConfig: {}
       preK3sCommands:
+        - |
+          # Fix network: write systemd-networkd config matching by interface name
+          # (cloud-init netplan matches by MAC which can change on VM restart)
+          mkdir -p /etc/systemd/network
+          cat > /etc/systemd/network/10-enp1s0.network << 'NETEOF'
+          [Match]
+          Name=enp1s0
+
+          [Network]
+          DHCP=yes
+          LinkLocalAddressing=ipv6
+
+          [DHCP]
+          RouteMetric=100
+          UseMTU=true
+          NETEOF
+          sed -i 's/^          //' /etc/systemd/network/10-enp1s0.network
+          systemctl restart systemd-networkd
+          # Wait for DHCP lease
+          for i in $(seq 1 30); do
+            ip addr show enp1s0 | grep -q 'inet ' && break
+            sleep 1
+          done
         - |
           # Redirect proxy connections from local 10.0.2.2:6443 to LB IP
           # (k3s agent tries to connect to server's node-ip which is 10.0.2.2 in masquerade)
