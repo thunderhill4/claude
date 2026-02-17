@@ -8,6 +8,16 @@ async function fetchJSON<T>(url: string): Promise<T> {
   return res.json();
 }
 
+export interface AgentInfo {
+  name: string;
+  description: string;
+}
+
+export interface AgentsResponse {
+  agents: AgentInfo[];
+  default: string;
+}
+
 export const api = {
   getClusterStatus: () => fetchJSON<ClusterStatus>(`${BASE}/cluster/status`),
   getNodes: () => fetchJSON<KubeNode[]>(`${BASE}/nodes`),
@@ -26,11 +36,12 @@ export const api = {
     return fetchJSON<KubeEvent[]>(`${BASE}/events${params}`);
   },
   getNamespaces: () => fetchJSON<Namespace[]>(`${BASE}/namespaces`),
-  sendChat: async function* (message: string): AsyncGenerator<string> {
+  getAgents: () => fetchJSON<AgentsResponse>('/api/ai/agents'),
+  sendChat: async function* (message: string, agent?: string): AsyncGenerator<string> {
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, ...(agent ? { agent } : {}) }),
     });
     if (!res.ok) throw new Error(`Chat error: ${res.status}`);
     const reader = res.body?.getReader();

@@ -1,18 +1,88 @@
 package handlers
 
 import (
+	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
+// ChatRequest is the incoming request from the frontend.
 type ChatRequest struct {
 	Message string `json:"message"`
+	Agent   string `json:"agent,omitempty"` // optional: agent service name (default: k8s-agent)
 }
 
+// A2A protocol types
+type a2aRequest struct {
+	JSONRPC string    `json:"jsonrpc"`
+	Method  string    `json:"method"`
+	Params  a2aParams `json:"params"`
+	ID      string    `json:"id"`
+}
+
+type a2aParams struct {
+	Message a2aMessage `json:"message"`
+}
+
+type a2aMessage struct {
+	Kind      string    `json:"kind"`
+	MessageID string    `json:"messageId"`
+	Role      string    `json:"role"`
+	Parts     []a2aPart `json:"parts"`
+}
+
+type a2aPart struct {
+	Kind string `json:"kind"`
+	Text string `json:"text,omitempty"`
+}
+
+// A2A response parsing types (partial – only what we need)
+type a2aResponse struct {
+	Result json.RawMessage `json:"result"`
+}
+
+type a2aEvent struct {
+	Kind     string          `json:"kind"`
+	Final    bool            `json:"final"`
+	Status   *a2aStatus      `json:"status,omitempty"`
+	Parts    []a2aPart       `json:"parts,omitempty"`
+	Artifact *a2aArtifact    `json:"artifact,omitempty"`
+}
+
+type a2aStatus struct {
+	State   string          `json:"state"`
+	Message json.RawMessage `json:"message,omitempty"` // can be a string or a message object
+}
+
+type a2aArtifact struct {
+	Parts []a2aPart `json:"parts,omitempty"`
+}
+
+func getAgentURL(agentName string) string {
+	ns := os.Getenv("KAGENT_AGENT_NAMESPACE")
+	if ns == "" {
+		ns = "kagent"
+	}
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:8080/", agentName, ns)
+}
+
+func getDefaultAgent() string {
+	name := os.Getenv("KAGENT_AGENT_NAME")
+	if name == "" {
+		name = "k8s-agent"
+	}
+	return name
+}
+
+// HandleAIChat proxies user messages to a kagent agent via the A2A protocol
+// and streams the response back to the frontend as SSE.
 // POST /api/ai/chat
 func HandleAIChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -25,11 +95,16 @@ func HandleAIChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-
 	if req.Message == "" {
 		writeError(w, http.StatusBadRequest, "message is required")
 		return
 	}
+
+	agentName := req.Agent
+	if agentName == "" {
+		agentName = getDefaultAgent()
+	}
+	agentURL := getAgentURL(agentName)
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -43,27 +118,163 @@ func HandleAIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := generateMockResponse(req.Message)
-	words := strings.Fields(response)
+	// Build A2A request
+	msgID := fmt.Sprintf("msg-%d", time.Now().UnixNano())
+	reqID := fmt.Sprintf("req-%d", time.Now().UnixNano())
 
-	for i, word := range words {
-		if r.Context().Err() != nil {
-			return
-		}
-
-		token := word
-		if i < len(words)-1 {
-			token += " "
-		}
-
-		fmt.Fprintf(w, "data: %s\n\n", jsonEscape(token))
-		flusher.Flush()
-		time.Sleep(30 * time.Millisecond)
+	a2aReq := a2aRequest{
+		JSONRPC: "2.0",
+		Method:  "message/stream",
+		Params: a2aParams{
+			Message: a2aMessage{
+				Kind:      "message",
+				MessageID: msgID,
+				Role:      "user",
+				Parts:     []a2aPart{{Kind: "text", Text: req.Message}},
+			},
+		},
+		ID: reqID,
 	}
 
-	// Send done event
+	body, err := json.Marshal(a2aReq)
+	if err != nil {
+		log.Printf("Error marshaling A2A request: %v", err)
+		fmt.Fprintf(w, "data: Error preparing request\n\n")
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+
+	// Call kagent agent with timeout
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, agentURL, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("Error creating request to kagent agent %s: %v", agentName, err)
+		fmt.Fprintf(w, "data: Error connecting to AI agent\n\n")
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		log.Printf("Error calling kagent agent %s at %s: %v", agentName, agentURL, err)
+		fmt.Fprintf(w, "data: Error connecting to AI agent: %s\n\n", jsonEscape(err.Error()))
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Kagent agent %s returned status %d", agentName, resp.StatusCode)
+		fmt.Fprintf(w, "data: AI agent returned error (status %d)\n\n", resp.StatusCode)
+		fmt.Fprintf(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+
+	// Parse SSE stream from kagent and forward text tokens to frontend
+	scanner := bufio.NewScanner(resp.Body)
+	// Increase scanner buffer for large SSE lines
+	scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			break
+		}
+
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		if data == "" {
+			continue
+		}
+
+		// Parse the A2A JSON-RPC response
+		var a2aResp a2aResponse
+		if err := json.Unmarshal([]byte(data), &a2aResp); err != nil {
+			log.Printf("Error parsing A2A response: %v", err)
+			continue
+		}
+
+		var event a2aEvent
+		if err := json.Unmarshal(a2aResp.Result, &event); err != nil {
+			log.Printf("Error parsing A2A event: %v", err)
+			continue
+		}
+
+		// Extract text based on event kind
+		text := extractText(event)
+		if text != "" {
+			fmt.Fprintf(w, "data: %s\n\n", jsonEscape(text))
+			flusher.Flush()
+		}
+
+		if event.Final {
+			break
+		}
+	}
+
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		log.Printf("Error reading A2A stream: %v", err)
+	}
+
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+}
+
+// a2aFullMessage is a structured message object from the A2A protocol.
+type a2aFullMessage struct {
+	Role  string    `json:"role"`
+	Parts []a2aPart `json:"parts,omitempty"`
+}
+
+// extractText pulls text content from an A2A event.
+func extractText(event a2aEvent) string {
+	switch event.Kind {
+	case "status-update":
+		if event.Status == nil || len(event.Status.Message) == 0 {
+			return ""
+		}
+		// status.message can be either a plain string or a full message object.
+		// Try string first.
+		var s string
+		if err := json.Unmarshal(event.Status.Message, &s); err == nil {
+			return s
+		}
+		// Try full message object — skip if role is "user" (echo of input).
+		var msg a2aFullMessage
+		if err := json.Unmarshal(event.Status.Message, &msg); err == nil {
+			if msg.Role == "user" {
+				return ""
+			}
+			return partsToText(msg.Parts)
+		}
+	case "artifact-update":
+		// Skip artifact-update — the same text is already sent in status-update events.
+		// This avoids duplicate output.
+	case "message":
+		return partsToText(event.Parts)
+	}
+	return ""
+}
+
+func partsToText(parts []a2aPart) string {
+	var sb strings.Builder
+	for _, p := range parts {
+		if p.Kind == "text" && p.Text != "" {
+			sb.WriteString(p.Text)
+		}
+	}
+	return sb.String()
 }
 
 func jsonEscape(s string) string {
@@ -76,95 +287,77 @@ func jsonEscape(s string) string {
 	return string(b[1 : len(b)-1])
 }
 
-func generateMockResponse(message string) string {
-	msg := strings.ToLower(message)
-
-	switch {
-	case strings.Contains(msg, "pod") && (strings.Contains(msg, "running") || strings.Contains(msg, "show") || strings.Contains(msg, "list")):
-		return "Here's a summary of running pods in your cluster:\n\n" +
-			"**kube-system namespace:**\n" +
-			"- coredns-5dd5756b68-abcde (Running, 0 restarts)\n" +
-			"- etcd-control-plane (Running, 0 restarts)\n" +
-			"- kube-apiserver-control-plane (Running, 0 restarts)\n" +
-			"- kube-controller-manager (Running, 0 restarts)\n" +
-			"- kube-scheduler (Running, 0 restarts)\n\n" +
-			"All system pods appear healthy with zero restarts. You can view detailed pod information in the Pods section of the dashboard."
-
-	case strings.Contains(msg, "vm") || strings.Contains(msg, "virtual machine"):
-		if strings.Contains(msg, "create") || strings.Contains(msg, "start") || strings.Contains(msg, "launch") {
-			return "To create a new KubeVirt virtual machine, you would typically apply a VirtualMachine manifest. " +
-				"Here's a basic example:\n\n" +
-				"```yaml\napiVersion: kubevirt.io/v1\nkind: VirtualMachine\nmetadata:\n  name: my-vm\nspec:\n  running: true\n  template:\n    spec:\n      domain:\n        cpu:\n          cores: 2\n        memory:\n          guest: 4Gi\n```\n\n" +
-				"You can apply this with `kubectl apply -f vm.yaml`. Check the Virtual Machines tab to monitor its status."
-		}
-		return "Here's the status of KubeVirt virtual machines in your cluster:\n\n" +
-			"The Virtual Machines page shows all VMs managed by KubeVirt. Each VM displays its status (Running/Stopped), " +
-			"allocated CPU cores, memory, the node it's scheduled on, and its IP address.\n\n" +
-			"You can filter VMs by namespace using the namespace selector. " +
-			"If no VMs appear, ensure that KubeVirt is properly installed in your cluster."
-
-	case strings.Contains(msg, "cluster") && (strings.Contains(msg, "health") || strings.Contains(msg, "status")):
-		return "Let me check the cluster health for you.\n\n" +
-			"**Cluster Overview:**\n" +
-			"The cluster status dashboard provides a real-time view of your Kubernetes cluster. " +
-			"It shows the total number of nodes and their readiness state, pod distribution across different phases " +
-			"(Running, Pending, Failed), virtual machine counts, and namespace totals.\n\n" +
-			"**Key Metrics to Watch:**\n" +
-			"- Node readiness: All nodes should show Ready status\n" +
-			"- Pod failures: Check for pods in Failed or CrashLoopBackOff state\n" +
-			"- Pending pods: May indicate resource constraints\n\n" +
-			"Check the Cluster Status section at the top of the dashboard for current numbers."
-
-	case strings.Contains(msg, "node"):
-		return "Your Kubernetes nodes are the worker machines in your cluster.\n\n" +
-			"**Node Information:**\n" +
-			"Each node shows its status (Ready/NotReady), roles (control-plane, worker), " +
-			"allocatable CPU and memory resources, age, and kubelet version.\n\n" +
-			"**Tips:**\n" +
-			"- Nodes with NotReady status may have networking issues or resource pressure\n" +
-			"- Check node conditions for details: `kubectl describe node <name>`\n" +
-			"- Monitor CPU and memory to ensure adequate capacity for workloads\n\n" +
-			"View the Nodes tab in the dashboard for the complete list."
-
-	case strings.Contains(msg, "event"):
-		return "Kubernetes events provide insights into what's happening in your cluster.\n\n" +
-			"**Event Types:**\n" +
-			"- **Normal**: Routine operations like pod scheduling and image pulling\n" +
-			"- **Warning**: Issues like failed scheduling, unhealthy probes, or OOM kills\n\n" +
-			"**Common Events:**\n" +
-			"- Scheduled: Pod assigned to a node\n" +
-			"- Pulling/Pulled: Container image operations\n" +
-			"- Created/Started: Container lifecycle\n" +
-			"- Killing: Pod termination\n" +
-			"- FailedScheduling: Resource constraints\n\n" +
-			"Check the Events tab and filter by namespace to investigate issues."
-
-	case strings.Contains(msg, "namespace"):
-		return "Namespaces provide a way to divide cluster resources between multiple users or teams.\n\n" +
-			"**Default Namespaces:**\n" +
-			"- `default`: The default namespace for objects with no namespace\n" +
-			"- `kube-system`: System components created by Kubernetes\n" +
-			"- `kube-public`: Readable by all users, used for public resources\n" +
-			"- `kube-node-lease`: Node heartbeat leases\n\n" +
-			"Use the namespace filter throughout the dashboard to scope your view to specific namespaces."
-
-	case strings.Contains(msg, "help") || strings.Contains(msg, "what can you"):
-		return "I can help you understand and manage your Kubernetes cluster. Here are some things you can ask me:\n\n" +
-			"- **\"Show running pods\"** - Get a summary of pod status\n" +
-			"- **\"List VMs\"** - View virtual machine information\n" +
-			"- **\"Cluster health\"** - Check overall cluster status\n" +
-			"- **\"Show nodes\"** - View node details\n" +
-			"- **\"List events\"** - See recent cluster events\n" +
-			"- **\"Explain namespaces\"** - Learn about namespace usage\n\n" +
-			"I can also answer general Kubernetes questions and provide troubleshooting guidance."
-
-	default:
-		return "I understand you're asking about: \"" + message + "\"\n\n" +
-			"I'm an AI assistant for this Kubernetes dashboard. I can help with:\n\n" +
-			"- Viewing and understanding cluster resources (pods, nodes, VMs)\n" +
-			"- Interpreting cluster health and status\n" +
-			"- Providing Kubernetes best practices and guidance\n" +
-			"- Troubleshooting common issues\n\n" +
-			"Try asking me about specific resources like \"show running pods\" or \"cluster health\" for detailed information."
+// HandleListAgents returns the list of available kagent agents.
+// GET /api/ai/agents
+func HandleListAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
 	}
+
+	ns := os.Getenv("KAGENT_AGENT_NAMESPACE")
+	if ns == "" {
+		ns = "kagent"
+	}
+
+	controllerURL := fmt.Sprintf("http://kagent-controller.%s.svc.cluster.local:8083/api/agents", ns)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, controllerURL, nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create request")
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		log.Printf("Error fetching agents from kagent controller: %v", err)
+		writeError(w, http.StatusBadGateway, "failed to fetch agents from kagent")
+		return
+	}
+	defer resp.Body.Close()
+
+	// Parse the controller response to extract agent names
+	var controllerResp struct {
+		Error bool `json:"error"`
+		Data  []struct {
+			ID    string `json:"id"`
+			Agent struct {
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+				Spec struct {
+					Description string `json:"description"`
+				} `json:"spec"`
+			} `json:"agent"`
+		} `json:"data"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&controllerResp); err != nil {
+		log.Printf("Error decoding agents response: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to parse agents response")
+		return
+	}
+
+	type agentInfo struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	agents := make([]agentInfo, 0, len(controllerResp.Data))
+	defaultAgent := getDefaultAgent()
+	for _, a := range controllerResp.Data {
+		agents = append(agents, agentInfo{
+			Name:        a.Agent.Metadata.Name,
+			Description: a.Agent.Spec.Description,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"agents":  agents,
+		"default": defaultAgent,
+	})
 }

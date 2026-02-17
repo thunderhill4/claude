@@ -66,6 +66,11 @@ spec:
         - name: backend
           image: kubeui-backend:latest
           imagePullPolicy: IfNotPresent
+          env:
+            - name: KAGENT_AGENT_NAME
+              value: "k8s-agent"
+            - name: KAGENT_AGENT_NAMESPACE
+              value: "kagent"
           ports:
             - containerPort: 8080
               name: http
