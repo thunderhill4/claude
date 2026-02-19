@@ -55,7 +55,11 @@ export const api = {
         if (line.startsWith('data: ')) {
           const data = line.slice(6);
           if (data === '[DONE]') return;
-          yield data;
+          try {
+            yield JSON.parse(data) as string;
+          } catch {
+            yield data;
+          }
         }
       }
     }

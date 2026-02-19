@@ -66,6 +66,10 @@ type a2aArtifact struct {
 }
 
 func getAgentURL(agentName string) string {
+	// Allow full URL override for local development (e.g. when port-forwarding)
+	if base := os.Getenv("KAGENT_AGENT_URL"); base != "" {
+		return strings.TrimRight(base, "/") + "/"
+	}
 	ns := os.Getenv("KAGENT_AGENT_NAMESPACE")
 	if ns == "" {
 		ns = "kagent"
@@ -139,9 +143,7 @@ func HandleAIChat(w http.ResponseWriter, r *http.Request) {
 	body, err := json.Marshal(a2aReq)
 	if err != nil {
 		log.Printf("Error marshaling A2A request: %v", err)
-		fmt.Fprintf(w, "data: Error preparing request\n\n")
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
+		writeSSEMessage(w, flusher, "Error preparing request")
 		return
 	}
 
@@ -152,9 +154,7 @@ func HandleAIChat(w http.ResponseWriter, r *http.Request) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, agentURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("Error creating request to kagent agent %s: %v", agentName, err)
-		fmt.Fprintf(w, "data: Error connecting to AI agent\n\n")
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
+		writeSSEMessage(w, flusher, "Error connecting to AI agent")
 		return
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -163,18 +163,14 @@ func HandleAIChat(w http.ResponseWriter, r *http.Request) {
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		log.Printf("Error calling kagent agent %s at %s: %v", agentName, agentURL, err)
-		fmt.Fprintf(w, "data: Error connecting to AI agent: %s\n\n", jsonEscape(err.Error()))
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
+		writeSSEMessage(w, flusher, fmt.Sprintf("Error connecting to AI agent: %s", err.Error()))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("Kagent agent %s returned status %d", agentName, resp.StatusCode)
-		fmt.Fprintf(w, "data: AI agent returned error (status %d)\n\n", resp.StatusCode)
-		fmt.Fprintf(w, "data: [DONE]\n\n")
-		flusher.Flush()
+		writeSSEMessage(w, flusher, fmt.Sprintf("AI agent returned error (status %d)", resp.StatusCode))
 		return
 	}
 
@@ -214,7 +210,12 @@ func HandleAIChat(w http.ResponseWriter, r *http.Request) {
 		// Extract text based on event kind
 		text := extractText(event)
 		if text != "" {
-			fmt.Fprintf(w, "data: %s\n\n", jsonEscape(text))
+			b, err := json.Marshal(text)
+			if err != nil {
+				log.Printf("Error marshaling text token: %v", err)
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", string(b))
 			flusher.Flush()
 		}
 
@@ -277,14 +278,16 @@ func partsToText(parts []a2aPart) string {
 	return sb.String()
 }
 
-func jsonEscape(s string) string {
-	b, err := json.Marshal(s)
+// writeSSEMessage sends a JSON-encoded text message followed by [DONE] and flushes.
+func writeSSEMessage(w http.ResponseWriter, flusher http.Flusher, msg string) {
+	b, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("Error marshaling token: %v", err)
-		return s
+		fmt.Fprintf(w, "data: \"internal error\"\n\n")
+	} else {
+		fmt.Fprintf(w, "data: %s\n\n", string(b))
 	}
-	// Remove surrounding quotes from JSON string
-	return string(b[1 : len(b)-1])
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 // HandleListAgents returns the list of available kagent agents.
@@ -295,12 +298,14 @@ func HandleListAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns := os.Getenv("KAGENT_AGENT_NAMESPACE")
-	if ns == "" {
-		ns = "kagent"
+	controllerURL := os.Getenv("KAGENT_CONTROLLER_URL")
+	if controllerURL == "" {
+		ns := os.Getenv("KAGENT_AGENT_NAMESPACE")
+		if ns == "" {
+			ns = "kagent"
+		}
+		controllerURL = fmt.Sprintf("http://kagent-controller.%s.svc.cluster.local:8083/api/agents", ns)
 	}
-
-	controllerURL := fmt.Sprintf("http://kagent-controller.%s.svc.cluster.local:8083/api/agents", ns)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()

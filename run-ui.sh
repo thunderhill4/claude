@@ -4,17 +4,36 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UI_DIR="$SCRIPT_DIR/ui"
 
+# Ports for local port-forwards to kagent services
+KAGENT_LOCAL_PORT="${KAGENT_LOCAL_PORT:-18080}"
+CONTROLLER_LOCAL_PORT="${CONTROLLER_LOCAL_PORT:-18083}"
+
+KAGENT_NS="${KAGENT_AGENT_NAMESPACE:-kagent}"
+KAGENT_AGENT="${KAGENT_AGENT_NAME:-k8s-agent}"
+
 cleanup() {
     echo "Shutting down..."
-    kill $BACKEND_PID $FRONTEND_PID 2>/dev/null
-    wait $BACKEND_PID $FRONTEND_PID 2>/dev/null
+    kill $BACKEND_PID $FRONTEND_PID $PF_AGENT_PID $PF_CTRL_PID 2>/dev/null
+    wait $BACKEND_PID $FRONTEND_PID $PF_AGENT_PID $PF_CTRL_PID 2>/dev/null
     echo "Done."
 }
 trap cleanup EXIT INT TERM
 
-# Start the Go backend
+# Port-forward kagent services so the local backend can reach them
+echo "Setting up port-forwards to kagent in namespace '$KAGENT_NS'..."
+kubectl port-forward -n "$KAGENT_NS" "svc/$KAGENT_AGENT" "${KAGENT_LOCAL_PORT}:8080" >/dev/null 2>&1 &
+PF_AGENT_PID=$!
+kubectl port-forward -n "$KAGENT_NS" svc/kagent-controller "${CONTROLLER_LOCAL_PORT}:8083" >/dev/null 2>&1 &
+PF_CTRL_PID=$!
+sleep 2
+
+# Start the Go backend with URLs pointing to the local port-forwards
 echo "Starting backend on :8080..."
 cd "$UI_DIR/backend"
+KAGENT_AGENT_URL="http://localhost:${KAGENT_LOCAL_PORT}/" \
+KAGENT_CONTROLLER_URL="http://localhost:${CONTROLLER_LOCAL_PORT}/api/agents" \
+KAGENT_AGENT_NAME="$KAGENT_AGENT" \
+KAGENT_AGENT_NAMESPACE="$KAGENT_NS" \
 go run . &
 BACKEND_PID=$!
 
@@ -28,6 +47,7 @@ echo ""
 echo "UI is running:"
 echo "  Frontend: http://localhost:5173"
 echo "  Backend:  http://localhost:8080"
+echo "  kagent ($KAGENT_AGENT) forwarded from localhost:${KAGENT_LOCAL_PORT}"
 echo ""
 echo "Press Ctrl+C to stop."
 

@@ -2,6 +2,8 @@ import { cn } from '@/lib/utils';
 import { ResourceCard } from './ResourceCard';
 import type { ChatMessage } from '@/lib/types';
 import { User, Bot } from 'lucide-react';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -26,7 +28,13 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               : 'bg-secondary text-foreground',
           )}
         >
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          {isUser ? (
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          ) : (
+            <div className="prose prose-sm max-w-none dark:prose-invert prose-pre:bg-muted prose-code:text-foreground">
+              <Markdown remarkPlugins={[remarkGfm]}>{message.content}</Markdown>
+            </div>
+          )}
         </div>
         {message.resources?.map((r, i) => (
           <ResourceCard key={i} resource={r} />

@@ -80,7 +80,7 @@ export function ChatPanel() {
           value={selectedAgent}
           onChange={(e) => setSelectedAgent(e.target.value)}
           disabled={streaming || agentsLoading}
-          className="rounded-md border bg-background px-2 py-1 text-sm"
+          className="rounded-md border bg-background text-foreground px-2 py-1 text-sm"
         >
           {agents.map((a) => (
             <option key={a.name} value={a.name}>
@@ -101,7 +101,7 @@ export function ChatPanel() {
             <Bot className="h-8 w-8 text-primary-foreground" />
           </div>
           <div className="text-center">
-            <h2 className="text-xl font-semibold">KubeUI Assistant</h2>
+            <h2 className="text-xl font-semibold text-foreground">KubeUI Assistant</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Powered by kagent ({selectedAgent}) using Ollama/llama3.2
             </p>

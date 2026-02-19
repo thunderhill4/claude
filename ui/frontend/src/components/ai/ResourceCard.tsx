@@ -14,7 +14,7 @@ export function ResourceCard({ resource }: ResourceCardProps) {
       <CardContent className="flex items-center justify-between py-2 px-4">
         <div className="flex items-center gap-3">
           <span className="text-xs font-medium text-muted-foreground">{resource.kind}</span>
-          <span className="font-medium text-sm">{resource.name}</span>
+          <span className="font-medium text-sm text-foreground">{resource.name}</span>
           <span className="text-xs text-muted-foreground">{resource.namespace}</span>
         </div>
         <div className="flex items-center gap-2">
