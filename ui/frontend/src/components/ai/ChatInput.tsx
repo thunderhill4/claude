@@ -35,7 +35,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           disabled={disabled}
           rows={1}
           className="flex-1 resize-none rounded-xl border border-input px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          style={{ minHeight: '44px', maxHeight: '120px', color: '#006400', backgroundColor: '#1e293b' }}
+          style={{ minHeight: '44px', maxHeight: '120px', color: '#ffffff', backgroundColor: '#1e293b' }}
           onInput={(e) => {
             const t = e.currentTarget;
             t.style.height = 'auto';

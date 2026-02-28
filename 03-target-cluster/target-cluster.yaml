@@ -43,6 +43,8 @@ spec:
   replicas: 1
   version: v1.31.4+k3s1
   kthreesConfigSpec:
+    agentConfig:
+      airGapped: true
     serverConfig:
       cloudProviderName: ""
       disableComponents:
@@ -51,40 +53,9 @@ spec:
       tlsSan:
         - 172.18.255.215
     preK3sCommands:
-      - |
-        # Fix network: write systemd-networkd config matching by interface name
-        # (cloud-init netplan matches by MAC which can change on VM restart)
-        mkdir -p /etc/systemd/network
-        cat > /etc/systemd/network/10-enp1s0.network << 'NETEOF'
-        [Match]
-        Name=enp1s0
-
-        [Network]
-        DHCP=yes
-        LinkLocalAddressing=ipv6
-
-        [DHCP]
-        RouteMetric=100
-        UseMTU=true
-        NETEOF
-        sed -i 's/^        //' /etc/systemd/network/10-enp1s0.network
-        systemctl restart systemd-networkd
-        # Wait for DHCP lease
-        for i in $(seq 1 30); do
-          ip addr show enp1s0 | grep -q 'inet ' && break
-          sleep 1
-        done
-      - |
-        useradd -m -s /bin/bash -G sudo ubuntu 2>/dev/null || true
-        echo 'ubuntu:ubuntu' | chpasswd
-        mkdir -p /home/ubuntu/.ssh
-        echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal@mahipal-proart13' > /home/ubuntu/.ssh/authorized_keys
-        chown -R ubuntu:ubuntu /home/ubuntu/.ssh
-        chmod 700 /home/ubuntu/.ssh
-        chmod 600 /home/ubuntu/.ssh/authorized_keys
-        echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu
-        sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-        systemctl restart sshd 2>/dev/null || true
+      - mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
+    postK3sCommands:
+      - systemctl daemon-reload && systemctl enable k3s && systemctl start k3s
   machineTemplate:
     infrastructureRef:
       apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
@@ -101,7 +72,7 @@ spec:
   template:
     spec:
       virtualMachineBootstrapCheck:
-        checkStrategy: ssh
+        checkStrategy: none
       virtualMachineTemplate:
         metadata:
           namespace: default
@@ -126,23 +97,9 @@ spec:
                 - name: default
                   pod: {}
               volumes:
-                - dataVolume:
-                    name: systemdisk-dv
+                - containerDisk:
+                    image: 172.18.0.2:5000/ubuntu-noble-k3s:latest
                   name: systemdisk
-          dataVolumeTemplates:
-            - metadata:
-                name: systemdisk-dv
-              spec:
-                pvc:
-                  accessModes:
-                    - ReadWriteOnce
-                  resources:
-                    requests:
-                      storage: 17Gi
-                source:
-                  pvc:
-                    namespace: default
-                    name: ubuntu-noble-dv
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: MachineDeployment
@@ -178,46 +135,13 @@ metadata:
 spec:
   template:
     spec:
-      agentConfig: {}
+      agentConfig:
+        airGapped: true
       preK3sCommands:
-        - |
-          # Fix network: write systemd-networkd config matching by interface name
-          # (cloud-init netplan matches by MAC which can change on VM restart)
-          mkdir -p /etc/systemd/network
-          cat > /etc/systemd/network/10-enp1s0.network << 'NETEOF'
-          [Match]
-          Name=enp1s0
-
-          [Network]
-          DHCP=yes
-          LinkLocalAddressing=ipv6
-
-          [DHCP]
-          RouteMetric=100
-          UseMTU=true
-          NETEOF
-          sed -i 's/^          //' /etc/systemd/network/10-enp1s0.network
-          systemctl restart systemd-networkd
-          # Wait for DHCP lease
-          for i in $(seq 1 30); do
-            ip addr show enp1s0 | grep -q 'inet ' && break
-            sleep 1
-          done
-        - |
-          # Redirect proxy connections from local 10.0.2.2:6443 to LB IP
-          # (k3s agent tries to connect to server's node-ip which is 10.0.2.2 in masquerade)
-          iptables -t nat -A OUTPUT -d 10.0.2.2 -p tcp --dport 6443 -j DNAT --to-destination 172.18.255.215:6443
-        - |
-          useradd -m -s /bin/bash -G sudo ubuntu 2>/dev/null || true
-          echo 'ubuntu:ubuntu' | chpasswd
-          mkdir -p /home/ubuntu/.ssh
-          echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal@mahipal-proart13' > /home/ubuntu/.ssh/authorized_keys
-          chown -R ubuntu:ubuntu /home/ubuntu/.ssh
-          chmod 700 /home/ubuntu/.ssh
-          chmod 600 /home/ubuntu/.ssh/authorized_keys
-          echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu
-          sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          systemctl restart sshd 2>/dev/null || true
+        - iptables -t nat -A OUTPUT -d 10.0.2.2 -p tcp --dport 6443 -j DNAT --to-destination 172.18.255.215:6443
+        - mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
+      postK3sCommands:
+        - systemctl daemon-reload && systemctl enable k3s-agent && systemctl start k3s-agent
 ---
 apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
 kind: KubevirtMachineTemplate
@@ -228,7 +152,7 @@ spec:
   template:
     spec:
       virtualMachineBootstrapCheck:
-        checkStrategy: ssh
+        checkStrategy: none
       virtualMachineTemplate:
         metadata:
           namespace: default
@@ -253,20 +177,6 @@ spec:
                 - name: default
                   pod: {}
               volumes:
-                - dataVolume:
-                    name: systemdisk-dv
+                - containerDisk:
+                    image: 172.18.0.2:5000/ubuntu-noble-k3s:latest
                   name: systemdisk
-          dataVolumeTemplates:
-            - metadata:
-                name: systemdisk-dv
-              spec:
-                pvc:
-                  accessModes:
-                    - ReadWriteOnce
-                  resources:
-                    requests:
-                      storage: 17Gi
-                source:
-                  pvc:
-                    namespace: default
-                    name: ubuntu-noble-dv

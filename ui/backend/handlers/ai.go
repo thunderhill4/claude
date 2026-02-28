@@ -66,8 +66,14 @@ type a2aArtifact struct {
 }
 
 func getAgentURL(agentName string) string {
-	// Allow full URL override for local development (e.g. when port-forwarding)
-	if base := os.Getenv("KAGENT_AGENT_URL"); base != "" {
+	// Check per-agent override: KAGENT_AGENT_URL_<NAME_UPPERCASED_DASHES_TO_UNDERSCORES>
+	// e.g. target-cluster-agent → KAGENT_AGENT_URL_TARGET_CLUSTER_AGENT
+	envKey := "KAGENT_AGENT_URL_" + strings.ToUpper(strings.ReplaceAll(agentName, "-", "_"))
+	if base := os.Getenv(envKey); base != "" {
+		return strings.TrimRight(base, "/") + "/"
+	}
+	// Fall back to global override for the default agent (used when port-forwarding a single agent)
+	if base := os.Getenv("KAGENT_AGENT_URL"); base != "" && agentName == getDefaultAgent() {
 		return strings.TrimRight(base, "/") + "/"
 	}
 	ns := os.Getenv("KAGENT_AGENT_NAMESPACE")

@@ -48,8 +48,23 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Cluster status
+	// Cluster status (management cluster)
 	mux.HandleFunc("/api/v1/cluster/status", handlers.HandleClusterStatus)
+
+	// Target cluster deployment / deletion
+	mux.HandleFunc("/api/v1/cluster/deploy", handlers.HandleDeployCluster)
+	mux.HandleFunc("/api/v1/cluster/deploy/logs", handlers.HandleDeployLogs)
+	mux.HandleFunc("/api/v1/cluster/delete", handlers.HandleDeleteClusterStream)
+	mux.HandleFunc("/api/v1/cluster/target-status", handlers.HandleTargetClusterStatus)
+	mux.HandleFunc("/api/v1/cluster/target-delete", handlers.HandleDeleteCluster)
+
+	// CDI image repository
+	mux.HandleFunc("/api/v1/images", handlers.HandleCDIImages)
+
+	// Container registry
+	mux.HandleFunc("/api/v1/registry/images", handlers.HandleRegistryImages)
+	mux.HandleFunc("/api/v1/registry/images/", handlers.HandleRegistryDeleteImage)
+	mux.HandleFunc("/api/v1/registry/config", handlers.HandleRegistryConfig)
 
 	// Resources
 	mux.HandleFunc("/api/v1/nodes", handlers.HandleNodes)

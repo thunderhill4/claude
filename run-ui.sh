@@ -10,11 +10,12 @@ CONTROLLER_LOCAL_PORT="${CONTROLLER_LOCAL_PORT:-18083}"
 
 KAGENT_NS="${KAGENT_AGENT_NAMESPACE:-kagent}"
 KAGENT_AGENT="${KAGENT_AGENT_NAME:-k8s-agent}"
+TARGET_AGENT_LOCAL_PORT="${TARGET_AGENT_LOCAL_PORT:-18081}"
 
 cleanup() {
     echo "Shutting down..."
-    kill $BACKEND_PID $FRONTEND_PID $PF_AGENT_PID $PF_CTRL_PID 2>/dev/null
-    wait $BACKEND_PID $FRONTEND_PID $PF_AGENT_PID $PF_CTRL_PID 2>/dev/null
+    kill $BACKEND_PID $FRONTEND_PID $PF_AGENT_PID $PF_CTRL_PID $PF_TARGET_PID 2>/dev/null
+    wait $BACKEND_PID $FRONTEND_PID $PF_AGENT_PID $PF_CTRL_PID $PF_TARGET_PID 2>/dev/null
     echo "Done."
 }
 trap cleanup EXIT INT TERM
@@ -25,6 +26,15 @@ kubectl port-forward -n "$KAGENT_NS" "svc/$KAGENT_AGENT" "${KAGENT_LOCAL_PORT}:8
 PF_AGENT_PID=$!
 kubectl port-forward -n "$KAGENT_NS" svc/kagent-controller "${CONTROLLER_LOCAL_PORT}:8083" >/dev/null 2>&1 &
 PF_CTRL_PID=$!
+
+# Port-forward target-cluster-agent (if it exists)
+if kubectl get svc target-cluster-agent -n "$KAGENT_NS" &>/dev/null; then
+    echo "Setting up port-forward to target-cluster-agent on :${TARGET_AGENT_LOCAL_PORT}..."
+    kubectl port-forward -n "$KAGENT_NS" svc/target-cluster-agent "${TARGET_AGENT_LOCAL_PORT}:8080" >/dev/null 2>&1 &
+    PF_TARGET_PID=$!
+else
+    PF_TARGET_PID=""
+fi
 sleep 2
 
 # Start the Go backend with URLs pointing to the local port-forwards
@@ -34,6 +44,8 @@ KAGENT_AGENT_URL="http://localhost:${KAGENT_LOCAL_PORT}/" \
 KAGENT_CONTROLLER_URL="http://localhost:${CONTROLLER_LOCAL_PORT}/api/agents" \
 KAGENT_AGENT_NAME="$KAGENT_AGENT" \
 KAGENT_AGENT_NAMESPACE="$KAGENT_NS" \
+KAGENT_AGENT_URL_TARGET_CLUSTER_AGENT="http://localhost:${TARGET_AGENT_LOCAL_PORT}/" \
+CLAUDE_DIR="$SCRIPT_DIR" \
 go run . &
 BACKEND_PID=$!
 

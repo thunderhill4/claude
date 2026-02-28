@@ -69,3 +69,61 @@ export interface ResourceRef {
 }
 
 export type AppMode = 'sre' | 'ai';
+
+export interface DeployLogEntry {
+  type: 'step' | 'info' | 'success' | 'error' | 'warn' | 'done';
+  message: string;
+  time: string;
+}
+
+export interface MachineInfo {
+  name: string;
+  phase: string;
+  role: string;
+}
+
+export interface VMIInfo {
+  name: string;
+  phase: string;
+  ip: string;
+}
+
+export interface TargetClusterStatus {
+  state: 'idle' | 'running' | 'done' | 'failed';
+  operation: 'deploy' | 'delete' | '';
+  clusterPhase: string;
+  machines: MachineInfo[];
+  vmis: VMIInfo[];
+  apiReady: boolean;
+}
+
+export interface DVImage {
+  name: string;
+  namespace: string;
+  phase: string;
+  progress: string;
+  sourceType: string;
+  size: string;
+  claimName: string;
+  age: string;
+  clusterName: string;
+}
+
+export interface TagInfo {
+  tag: string;
+  digest: string;
+  created: string;
+  size: number;
+}
+
+export interface RegistryImage {
+  name: string;
+  tags: string[];
+  tagInfo: TagInfo[];
+}
+
+export interface RegistryConfig {
+  url: string;
+  name: string;
+  status: 'connected' | 'disconnected';
+}

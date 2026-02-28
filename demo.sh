@@ -19,6 +19,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLUSTER_NAME="target-cluster"
 LB_IP="172.18.255.215"
 KUBECONFIG_PATH="/tmp/${CLUSTER_NAME}-kubeconfig"
+REGISTRY_URL="172.18.0.2:5000"
+CONTAINER_IMAGE="${REGISTRY_URL}/ubuntu-noble-k3s:latest"
 
 # ── Colors ──────────────────────────────────────────────────
 CYAN='\033[0;36m'
@@ -87,7 +89,7 @@ echo "    Stack:  KubeVirt (VMs) + Cluster API (lifecycle) + k3s (distro)"
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-banner "Step 1/8: Check Management Cluster Prerequisites"
+banner "Step 1/9: Check Management Cluster Prerequisites"
 # ─────────────────────────────────────────────────────────────
 
 echo ""
@@ -98,14 +100,15 @@ echo ""
 
 check_ready "KubeVirt installed" "kubectl get kubevirt -A -o jsonpath='{.items[0].status.phase}' | grep -q Deployed"
 check_ready "CDI installed" "kubectl get cdi -A -o jsonpath='{.items[0].status.phase}' | grep -q Deployed"
-check_ready "Golden VM image (ubuntu-noble-dv)" "kubectl get dv ubuntu-noble-dv -o jsonpath='{.status.phase}' | grep -q Succeeded"
+check_ready "Container registry (172.18.0.2:5000)" "curl -s http://172.18.0.2:5000/v2/ >/dev/null"
+check_ready "Golden VM image in registry" "curl -s http://172.18.0.2:5000/v2/ubuntu-noble-k3s/tags/list | grep -q latest"
 check_ready "kubectl available" "kubectl version --client=true"
 check_ready "clusterctl available" "clusterctl version"
 
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-banner "Step 2/8: Ensure MetalLB is Ready"
+banner "Step 2/9: Ensure MetalLB is Ready"
 # ─────────────────────────────────────────────────────────────
 
 echo ""
@@ -124,7 +127,7 @@ fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-banner "Step 3/8: Ensure CAPI Providers are Ready"
+banner "Step 3/9: Ensure CAPI Providers are Ready"
 # ─────────────────────────────────────────────────────────────
 
 echo ""
@@ -152,22 +155,47 @@ fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-banner "Step 4/8: Show the Golden VM Image"
+banner "Step 4/9: Pre-pull VM Image on Kind Nodes"
 # ─────────────────────────────────────────────────────────────
 
 echo ""
-echo "  Every VM node boots from a clone of this golden Ubuntu image."
-echo "  The DataVolume was pre-imported using CDI from an Ubuntu cloud image."
+echo "  Pre-pulling the containerDisk image on Kind nodes to speed up VM creation."
+echo "  This caches the image locally so KubeVirt doesn't need to pull it."
 echo ""
 
-run_cmd kubectl get dv ubuntu-noble-dv
-echo ""
-run_cmd kubectl get pvc ubuntu-noble-dv -o custom-columns='NAME:.metadata.name,SIZE:.status.capacity.storage,ACCESS:.status.accessModes[0],STATUS:.status.phase'
+KIND_NODES=$(docker ps --filter "name=cluster2" --format '{{.Names}}')
+for node in $KIND_NODES; do
+  if docker exec "$node" crictl images 2>/dev/null | grep -q "ubuntu-noble-k3s"; then
+    echo -e "    ${GREEN}✓${NC} Image already cached on $node"
+  else
+    echo -e "    ${YELLOW}○${NC} Pulling image on $node..."
+    docker exec "$node" crictl pull "${CONTAINER_IMAGE}" 2>/dev/null || \
+    docker exec "$node" ctr -n k8s.io images pull --plain-http "${CONTAINER_IMAGE}" 2>/dev/null || \
+    echo -e "    ${RED}!${NC} Could not pull image on $node"
+  fi
+done
 
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-banner "Step 5/8: Deploy the Target Cluster"
+banner "Step 5/9: Show the Golden VM Image"
+# ─────────────────────────────────────────────────────────────
+
+echo ""
+echo "  Every VM node boots from a containerDisk image stored in the local registry."
+echo "  The image contains Ubuntu Noble with k3s pre-installed for faster boot times."
+echo ""
+
+info "Container registry images:"
+run_cmd "curl -s http://172.18.0.2:5000/v2/_catalog | jq -r '.repositories[]' 2>/dev/null || echo 'Registry not accessible'"
+echo ""
+info "Available tags for ubuntu-noble-k3s:"
+run_cmd "curl -s http://172.18.0.2:5000/v2/ubuntu-noble-k3s/tags/list | jq -r '.tags[]' 2>/dev/null || echo 'Image not found'"
+
+echo ""
+
+# ─────────────────────────────────────────────────────────────
+banner "Step 6/9: Deploy the Target Cluster"
 # ─────────────────────────────────────────────────────────────
 
 echo ""
@@ -175,9 +203,9 @@ echo "  Applying CAPI resources that define the target cluster:"
 echo "    - Cluster + KubevirtCluster    — cluster definition + VM infra"
 echo "    - KThreesControlPlane          — 1 control plane VM (k3s server)"
 echo "    - MachineDeployment            — 1 worker VM (k3s agent)"
-echo "    - KubevirtMachineTemplate x2   — VM specs (2 CPU, 4Gi RAM, 17Gi disk)"
+echo "    - KubevirtMachineTemplate x2   — VM specs (2 CPU, 4Gi RAM)"
 echo ""
-echo "  Each VM disk is cloned from the golden image via CDI."
+echo "  Each VM boots from the containerDisk image (172.18.0.2:5000/ubuntu-noble-k3s)."
 echo "  The API server is exposed via MetalLB LoadBalancer at ${LB_IP}:6443."
 echo ""
 
@@ -193,15 +221,15 @@ fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-banner "Step 6/8: Wait for VMs to Boot"
+banner "Step 7/9: Wait for VMs to Boot"
 # ─────────────────────────────────────────────────────────────
 
 echo ""
 echo "  CAPI is now orchestrating the cluster creation:"
-echo "    1. CDI clones the golden image into new DataVolumes (one per VM)"
-echo "    2. KubeVirt creates VirtualMachines with the cloned disks"
-echo "    3. VMs boot Ubuntu and run cloud-init"
-echo "    4. cloud-init installs and configures k3s"
+echo "    1. KubeVirt pulls the containerDisk image from the registry"
+echo "    2. VirtualMachines are created using the containerDisk"
+echo "    3. VMs boot Ubuntu (k3s pre-installed) and run cloud-init"
+echo "    4. cloud-init configures and starts k3s"
 echo ""
 echo "  This takes a few minutes. Watching for VMs to reach 'Running'..."
 echo ""
@@ -239,7 +267,7 @@ done
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-banner "Step 7/8: Wait for Target Cluster API Server"
+banner "Step 8/9: Wait for Target Cluster API Server"
 # ─────────────────────────────────────────────────────────────
 
 echo ""
@@ -321,7 +349,7 @@ done
 echo ""
 
 # ─────────────────────────────────────────────────────────────
-banner "Step 8/8: Verify the Target Cluster"
+banner "Step 9/9: Verify the Target Cluster"
 # ─────────────────────────────────────────────────────────────
 
 echo ""
@@ -338,6 +366,21 @@ echo ""
 
 info "KubeVirt VM instances:"
 run_cmd kubectl get vmi -l "cluster.x-k8s.io/cluster-name=${CLUSTER_NAME}"
+echo ""
+
+info "SSH connectivity check (post-deployment verification):"
+for vmi in $(kubectl get vmi -l "cluster.x-k8s.io/cluster-name=${CLUSTER_NAME}" -o jsonpath='{.items[*].metadata.name}'); do
+  VM_IP=$(kubectl get vmi "$vmi" -o jsonpath='{.status.interfaces[0].ipAddress}' 2>/dev/null)
+  if [ -n "$VM_IP" ]; then
+    if timeout 5 bash -c "echo > /dev/tcp/${VM_IP}/22" 2>/dev/null; then
+      echo -e "    ${GREEN}✓${NC} $vmi ($VM_IP) - SSH port open"
+    else
+      echo -e "    ${YELLOW}○${NC} $vmi ($VM_IP) - SSH port not responding"
+    fi
+  else
+    echo -e "    ${YELLOW}○${NC} $vmi - No IP assigned yet"
+  fi
+done
 echo ""
 
 info "Target cluster nodes:"
@@ -371,4 +414,11 @@ echo "    kubectl scale machinedeployment ${CLUSTER_NAME}-workers --replicas=3"
 echo ""
 echo "  Tear down:"
 echo "    make clean"
+echo ""
+echo "  Run the Web UI:"
+echo "    make ui"
+echo "    # or: ./run-ui.sh"
+echo ""
+echo "  View registry images:"
+echo "    make registry"
 echo ""
