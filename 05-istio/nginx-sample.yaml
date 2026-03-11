@@ -1,0 +1,95 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Istio Ambient — nginx + sleep sample
+#
+# The 'sample' namespace is enrolled in the ambient mesh via the label:
+#   istio.io/dataplane-mode: ambient
+#
+# All pod-to-pod traffic is transparently secured by ztunnel (mTLS, L4 authz).
+# No sidecars are injected — ztunnel is a shared per-node DaemonSet.
+#
+# Test mTLS end-to-end:
+#   kubectl exec -n sample deploy/sleep -- curl -s nginx.sample
+#
+# Inspect ztunnel traffic logs:
+#   kubectl -n istio-system logs -l app=ztunnel --tail=10
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sample
+  labels:
+    # Enroll all pods in this namespace into the Istio ambient mesh
+    istio.io/dataplane-mode: ambient
+---
+# nginx — HTTP server
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: sample
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 10m
+              memory: 20Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  namespace: sample
+spec:
+  selector:
+    app: nginx
+  ports:
+    - port: 80
+      targetPort: 80
+---
+# sleep — curl client for testing mTLS connectivity through ztunnel
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sleep
+  namespace: sample
+  labels:
+    app: sleep
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sleep
+  template:
+    metadata:
+      labels:
+        app: sleep
+    spec:
+      containers:
+        - name: sleep
+          image: curlimages/curl:latest
+          command: ["sleep", "infinity"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi

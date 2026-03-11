@@ -230,7 +230,7 @@ func runScriptWithStream(script string) error {
 
 // ── Deployment flow ──────────────────────────────────────────────
 
-func runDeployment() {
+func runDeployment(profile string) {
 	dir := claudeDir()
 
 	defer func() {
@@ -313,10 +313,16 @@ func runDeployment() {
 	// ── Step 4: Apply cluster manifests ───────────────────────────
 	deploy.addLog("step", "━━ Step 4/6: Deploy Target Cluster ━━")
 	deploy.addLog("info", "Applying CAPI resources (Cluster, KubevirtCluster, KThreesControlPlane, MachineDeployment).")
-	deploy.addLog("info", "Each VM: 2 CPU · 4Gi RAM · 17Gi disk (cloned from ubuntu-noble-dv via CDI)")
-	deploy.addLog("info", "API server will be exposed at "+targetLBIP+":6443 via MetalLB")
 
-	clusterYAML := filepath.Join(dir, "03-target-cluster/target-cluster.yaml")
+	var clusterYAML string
+	if profile == "lite" {
+		deploy.addLog("info", "Profile: Lite — CP: 2 CPU · 4Gi RAM  |  Worker: 2 CPU · 4Gi RAM")
+		clusterYAML = filepath.Join(dir, "03-target-cluster/target-cluster-lite.yaml")
+	} else {
+		deploy.addLog("info", "Profile: Full — CP: 4 CPU · 8Gi RAM  |  Worker: 4 CPU · 6Gi RAM  |  ioThreadsPolicy: shared")
+		clusterYAML = filepath.Join(dir, "03-target-cluster/target-cluster.yaml")
+	}
+	deploy.addLog("info", "API server will be exposed at "+targetLBIP+":6443 via MetalLB")
 	if err := runShell("kubectl apply -f " + clusterYAML); err != nil {
 		fail("Failed to apply cluster manifests: " + err.Error())
 		return
@@ -447,7 +453,7 @@ func runDeployment() {
 
 // ── HTTP Handlers ─────────────────────────────────────────────────
 
-// POST /api/v1/cluster/deploy — start (or attach to running) deployment, stream SSE
+// POST /api/v1/cluster/deploy?profile=lite|full — start (or attach to running) deployment, stream SSE
 func HandleDeployCluster(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -456,10 +462,13 @@ func HandleDeployCluster(w http.ResponseWriter, r *http.Request) {
 
 	state := deploy.getState()
 	if state != "running" {
-		// Start fresh deployment
+		profile := r.URL.Query().Get("profile")
+		if profile != "lite" {
+			profile = "full"
+		}
 		deploy.resetForNewRun()
 		setCurrentOp("deploy")
-		go runDeployment()
+		go runDeployment(profile)
 	}
 
 	streamDeployLogs(w, r)
@@ -522,11 +531,12 @@ type VMIInfo struct {
 
 type TargetClusterStatus struct {
 	State        string        `json:"state"`
-	Operation    string        `json:"operation"` // "deploy" | "delete" | ""
+	Operation    string        `json:"operation"` // "deploy" | "delete" | "istio" | ""
 	ClusterPhase string        `json:"clusterPhase"`
 	Machines     []MachineInfo `json:"machines"`
 	VMIs         []VMIInfo     `json:"vmis"`
 	APIReady     bool          `json:"apiReady"`
+	IstioReady   bool          `json:"istioReady"`
 }
 
 // GET /api/v1/cluster/target-status
@@ -594,11 +604,14 @@ func HandleTargetClusterStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// API server reachability
+	// API server + Istio reachability
 	kubeconfigPath := "/tmp/" + targetClusterName + "-kubeconfig"
 	if _, err := os.Stat(kubeconfigPath); err == nil {
 		status.APIReady = shellCheck(fmt.Sprintf(
 			"kubectl --kubeconfig=%s get nodes --request-timeout=3s 2>/dev/null", kubeconfigPath))
+		status.IstioReady = shellCheck(fmt.Sprintf(
+			"kubectl --kubeconfig=%s get deployment istiod -n istio-system --no-headers --ignore-not-found 2>/dev/null | grep -q istiod",
+			kubeconfigPath))
 	}
 
 	writeJSON(w, status)
@@ -714,6 +727,77 @@ func HandleDeleteClusterStream(w http.ResponseWriter, r *http.Request) {
 	setCurrentOp("delete")
 	go runDeletion()
 
+	streamDeployLogs(w, r)
+}
+
+// ── Istio install flow ────────────────────────────────────────────
+
+func runIstioInstall() {
+	defer setCurrentOp("")
+	defer func() {
+		if r := recover(); r != nil {
+			deploy.addLog("error", fmt.Sprintf("Unexpected error: %v", r))
+			deploy.finish("failed")
+		}
+	}()
+
+	dir := claudeDir()
+	kubeconfigPath := "/tmp/" + targetClusterName + "-kubeconfig"
+
+	fail := func(msg string) {
+		deploy.addLog("error", msg)
+		deploy.finish("failed")
+	}
+
+	// ── Step 1: Verify cluster access ─────────────────────────────
+	deploy.addLog("step", "━━ Step 1/3: Verify Target Cluster Access ━━")
+	if _, err := os.Stat(kubeconfigPath); err != nil {
+		fail("Kubeconfig not found at " + kubeconfigPath + " — deploy the cluster first.")
+		return
+	}
+	if !shellCheck(fmt.Sprintf("kubectl --kubeconfig=%s get nodes --request-timeout=5s 2>/dev/null", kubeconfigPath)) {
+		fail("Target cluster API server is not reachable. Ensure the cluster is deployed and running.")
+		return
+	}
+	deploy.addLog("success", "✓ Target cluster reachable at "+targetLBIP+":6443")
+
+	// ── Step 2: Install Istio ambient + sample ─────────────────────
+	deploy.addLog("step", "━━ Step 2/3: Install Istio Ambient + nginx sample ━━")
+	deploy.addLog("info", "Profile: ambient  |  Platform: k3s  |  Istio v1.24.3")
+	deploy.addLog("info", "Components: istiod · istio-cni-node (DaemonSet) · ztunnel (DaemonSet)")
+	deploy.addLog("info", "Sample: nginx + sleep in namespace 'sample' (ambient mesh enrolled)")
+
+	script := fmt.Sprintf("bash %s %s",
+		filepath.Join(dir, "05-istio/install-istio-ambient.sh"),
+		kubeconfigPath,
+	)
+	if err := runScriptWithStream(script); err != nil {
+		fail("Istio installation failed: " + err.Error())
+		return
+	}
+
+	// ── Done ──────────────────────────────────────────────────────
+	deploy.addLog("step", "━━ Step 3/3: Done! ━━")
+	deploy.addLog("success", "✓ Istio ambient installed — istiod · istio-cni-node · ztunnel ready")
+	deploy.addLog("success", "✓ nginx + sleep running in namespace 'sample' (no sidecars — ambient mTLS)")
+	deploy.addLog("info", "Test:  kubectl --kubeconfig="+kubeconfigPath+" exec -n sample deploy/sleep -- curl -s nginx.sample")
+	deploy.addLog("info", "Logs:  kubectl --kubeconfig="+kubeconfigPath+" -n istio-system logs -l app=ztunnel --tail=10")
+	deploy.finish("done")
+}
+
+// POST /api/v1/cluster/istio — install Istio ambient + nginx sample on the target cluster
+func HandleIstioInstall(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if deploy.getState() == "running" {
+		writeError(w, http.StatusConflict, "another operation is in progress")
+		return
+	}
+	deploy.resetForNewRun()
+	setCurrentOp("istio")
+	go runIstioInstall()
 	streamDeployLogs(w, r)
 }
 

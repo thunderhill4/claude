@@ -166,8 +166,10 @@ metadata:
   labels:
     app: kubeui
     component: frontend
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "172.18.255.211"
 spec:
-  type: NodePort
+  type: LoadBalancer
   selector:
     app: kubeui
     component: frontend

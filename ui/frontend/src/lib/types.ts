@@ -68,7 +68,7 @@ export interface ResourceRef {
   details: Record<string, string>;
 }
 
-export type AppMode = 'sre' | 'ai';
+export type AppMode = 'sre' | 'ai' | 'visual';
 
 export interface DeployLogEntry {
   type: 'step' | 'info' | 'success' | 'error' | 'warn' | 'done';
@@ -90,11 +90,12 @@ export interface VMIInfo {
 
 export interface TargetClusterStatus {
   state: 'idle' | 'running' | 'done' | 'failed';
-  operation: 'deploy' | 'delete' | '';
+  operation: 'deploy' | 'delete' | 'istio' | '';
   clusterPhase: string;
   machines: MachineInfo[];
   vmis: VMIInfo[];
   apiReady: boolean;
+  istioReady: boolean;
 }
 
 export interface DVImage {

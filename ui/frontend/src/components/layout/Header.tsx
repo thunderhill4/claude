@@ -6,11 +6,12 @@ import type { AppMode } from '@/lib/types';
 interface HeaderProps {
   mode: AppMode;
   onToggleMode: () => void;
+  onSetMode: (mode: AppMode) => void;
   namespace: string;
   onNamespaceChange: (ns: string) => void;
 }
 
-export function Header({ mode, onToggleMode, namespace, onNamespaceChange }: HeaderProps) {
+export function Header({ mode, onToggleMode, onSetMode, namespace, onNamespaceChange }: HeaderProps) {
   return (
     <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4">
       <div className="flex items-center gap-3">
@@ -18,7 +19,7 @@ export function Header({ mode, onToggleMode, namespace, onNamespaceChange }: Hea
         <h1 className="text-lg font-semibold">KubeUI</h1>
       </div>
       <div className="flex items-center gap-4">
-        <ModeToggle mode={mode} onToggle={onToggleMode} />
+        <ModeToggle mode={mode} onToggle={onToggleMode} onSetMode={onSetMode} />
         {mode === 'sre' && (
           <NamespaceSelector value={namespace} onChange={onNamespaceChange} />
         )}

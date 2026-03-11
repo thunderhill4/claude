@@ -5,7 +5,7 @@ metadata:
   namespace: metallb-system
 spec:
   addresses:
-    - IP_RANGE_PLACEHOLDER
+    - 172.18.255.211-172.18.255.220
 ---
 apiVersion: metallb.io/v1beta1
 kind: L2Advertisement

@@ -74,9 +74,32 @@ export const api = {
       }
     }
   },
-  deployCluster: async function* (): AsyncGenerator<DeployLogEntry> {
-    const res = await fetch(`${BASE}/cluster/deploy`, { method: 'POST' });
+  deployCluster: async function* (profile: 'lite' | 'full' = 'full'): AsyncGenerator<DeployLogEntry> {
+    const res = await fetch(`${BASE}/cluster/deploy?profile=${profile}`, { method: 'POST' });
     if (!res.ok) throw new Error(`Deploy error: ${res.status}`);
+    const reader = res.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      for (const line of text.split('\n')) {
+        if (line.startsWith('data: ')) {
+          const raw = line.slice(6).trim();
+          if (!raw || raw === '[DONE]') return;
+          try {
+            yield JSON.parse(raw) as DeployLogEntry;
+          } catch {
+            // skip malformed lines
+          }
+        }
+      }
+    }
+  },
+  installIstio: async function* (): AsyncGenerator<DeployLogEntry> {
+    const res = await fetch(`${BASE}/cluster/istio`, { method: 'POST' });
+    if (!res.ok) throw new Error(`Istio install error: ${res.status}`);
     const reader = res.body?.getReader();
     if (!reader) return;
     const decoder = new TextDecoder();

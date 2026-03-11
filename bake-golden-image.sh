@@ -235,6 +235,34 @@ write_files:
       echo "[bake] Step 4: Enabling systemd-networkd..."
       systemctl enable systemd-networkd
 
+      echo "[bake] Step 4b: Pre-loading kernel modules for k3s..."
+      modprobe br_netfilter 2>/dev/null || true
+      modprobe overlay 2>/dev/null || true
+      cat > /etc/modules-load.d/k3s.conf << 'MODEOF'
+      br_netfilter
+      overlay
+      MODEOF
+
+      echo "[bake] Step 4c: Pre-configuring sysctl for k3s..."
+      cat > /etc/sysctl.d/99-k3s.conf << 'SYSCTLEOF'
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.ipv4.ip_forward = 1
+      vm.swappiness = 0
+      vm.overcommit_memory = 1
+      vm.panic_on_oom = 0
+      SYSCTLEOF
+      sysctl --system >/dev/null 2>&1
+
+      echo "[bake] Step 4d: Masking slow/unnecessary services..."
+      systemctl mask \
+        snapd.service snapd.socket snapd.seeded.service \
+        multipathd.service multipathd.socket \
+        apt-daily.service apt-daily-upgrade.service \
+        apt-daily.timer apt-daily-upgrade.timer \
+        motd-news.service motd-news.timer \
+        unattended-upgrades.service 2>/dev/null || true
+
       echo "[bake] Step 5: PRE-INITIALIZING K3S (loading images into containerd)..."
       # Temporarily start k3s to load images
       systemctl daemon-reload
@@ -312,8 +340,8 @@ write_files:
       # Pre-generate a static token (will be overwritten by CAPI bootstrap but saves token gen time)
       echo "[bake] Pre-generating static server token..."
       mkdir -p /var/lib/rancher/k3s/server
-      # Generate a deterministic token that CAPI will override
-      echo "K10$(head -c 48 /dev/urandom | base64 | tr -d '\n' | head -c 48)::server:$(head -c 32 /dev/urandom | base64 | tr -d '\n' | head -c 32)" > /var/lib/rancher/k3s/server/token
+      # Use a simple password format — K10 format requires a valid CA hash which we can't pre-compute
+      head -c 32 /dev/urandom | base64 | tr -d '\n=' | head -c 32 > /var/lib/rancher/k3s/server/token
       chmod 600 /var/lib/rancher/k3s/server/token
 
       # Disable k3s (will be enabled by bootstrap)
@@ -433,9 +461,9 @@ spec:
     spec:
       domain:
         cpu:
-          cores: 2
+          cores: 4
         memory:
-          guest: 4Gi
+          guest: 8Gi
         devices:
           disks:
             - disk:

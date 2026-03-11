@@ -1,4 +1,4 @@
-.PHONY: all prereqs metallb capi-init target-cluster verify clean ui ui-build registry bake-image demo help pre-pull
+.PHONY: all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full verify clean ui ui-build registry bake-image demo help pre-pull istio
 
 REGISTRY_URL := 172.18.0.2:5000
 CONTAINER_IMAGE := $(REGISTRY_URL)/ubuntu-noble-k3s:latest
@@ -10,11 +10,14 @@ help:
 	@echo "KubeVirt Cluster API Demo"
 	@echo ""
 	@echo "Cluster Lifecycle:"
-	@echo "  make all            - Full setup (prereqs + metallb + capi + cluster)"
-	@echo "  make target-cluster - Deploy target cluster only"
-	@echo "  make verify         - Verify the target cluster"
-	@echo "  make clean          - Delete the target cluster"
-	@echo "  make demo           - Run interactive demo script"
+	@echo "  make all                  - Full setup (prereqs + metallb + capi + cluster)"
+	@echo "  make target-cluster       - Deploy target cluster (full profile)"
+	@echo "  make target-cluster-lite  - Deploy target cluster (lite: 2 CPU · 4Gi)"
+	@echo "  make target-cluster-full  - Deploy target cluster (full: 4 CPU · 8/6Gi)"
+	@echo "  make verify               - Verify the target cluster"
+	@echo "  make istio                - Install Istio ambient + nginx sample on target cluster"
+	@echo "  make clean                - Delete the target cluster"
+	@echo "  make demo                 - Run interactive demo script"
 	@echo ""
 	@echo "Prerequisites:"
 	@echo "  make prereqs        - Install clusterctl"
@@ -40,11 +43,19 @@ metallb:
 capi-init:
 	bash 02-capi-init/init-management-cluster.sh
 
-target-cluster:
+target-cluster: target-cluster-full
+
+target-cluster-lite:
+	kubectl apply -f 03-target-cluster/target-cluster-lite.yaml
+
+target-cluster-full:
 	kubectl apply -f 03-target-cluster/target-cluster.yaml
 
 verify:
 	bash 04-verify/verify-cluster.sh
+
+istio:
+	bash 05-istio/install-istio-ambient.sh /tmp/target-cluster-kubeconfig
 
 clean:
 	kubectl delete cluster target-cluster --ignore-not-found

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import type { JSX } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -15,6 +16,7 @@ import {
   XCircle,
   Loader2,
   Circle,
+  ShieldCheck,
 } from 'lucide-react';
 
 // ── Status helpers ──────────────────────────────────────────────
@@ -22,14 +24,17 @@ import {
 function StateBadge({ state, operation }: { state: string; operation?: string }) {
   type Variant = { label: string; className: string; icon: JSX.Element };
   const isDeleting = state === 'running' && operation === 'delete';
+  const isIstio    = state === 'running' && operation === 'istio';
 
   const base: Record<string, Variant> = {
     idle:   { label: 'Idle',      className: 'bg-secondary text-secondary-foreground', icon: <Circle className="h-3 w-3" /> },
     done:   { label: 'Ready',     className: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200', icon: <CheckCircle className="h-3 w-3" /> },
     failed: { label: 'Failed',    className: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200', icon: <XCircle className="h-3 w-3" /> },
     running: isDeleting
-      ? { label: 'Deleting',  className: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200', icon: <Loader2 className="h-3 w-3 animate-spin" /> }
-      : { label: 'Deploying', className: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200', icon: <Loader2 className="h-3 w-3 animate-spin" /> },
+      ? { label: 'Deleting',         className: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200', icon: <Loader2 className="h-3 w-3 animate-spin" /> }
+      : isIstio
+        ? { label: 'Installing Istio', className: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200', icon: <Loader2 className="h-3 w-3 animate-spin" /> }
+        : { label: 'Deploying',        className: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200', icon: <Loader2 className="h-3 w-3 animate-spin" /> },
   };
   const v = base[state] ?? base.idle;
   return (
@@ -83,8 +88,9 @@ export function ClusterManager() {
   const [status, setStatus] = useState<TargetClusterStatus | null>(null);
   const [logs, setLogs] = useState<DeployLogEntry[]>([]);
   const [streaming, setStreaming] = useState(false);
-  const [activeOp, setActiveOp] = useState<'deploy' | 'delete' | null>(null);
+  const [activeOp, setActiveOp] = useState<'deploy' | 'delete' | 'istio' | null>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [profile, setProfile] = useState<'lite' | 'full'>('full');
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -110,8 +116,8 @@ export function ClusterManager() {
   // Auto-attach when a run is already in progress on mount
   useEffect(() => {
     if (status?.state === 'running' && !streaming) {
-      const op = status.operation as 'deploy' | 'delete' | '' || 'deploy';
-      setActiveOp(op === '' ? 'deploy' : op);
+      const op = (status.operation || 'deploy') as 'deploy' | 'delete' | 'istio';
+      setActiveOp(op);
       attachToStream();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,7 +145,14 @@ export function ClusterManager() {
     if (streaming) return;
     setLogs([]);
     setActiveOp('deploy');
-    runStream(api.deployCluster());
+    runStream(api.deployCluster(profile));
+  }
+
+  function startIstio() {
+    if (streaming) return;
+    setLogs([]);
+    setActiveOp('istio');
+    runStream(api.installIstio());
   }
 
   async function attachToStream() {
@@ -174,8 +187,8 @@ export function ClusterManager() {
   const isRunning = status?.state === 'running' || streaming;
   const clusterExists = status && (status.clusterPhase !== '' || (status.machines ?? []).length > 0);
 
-  const logTitle = effectiveOp === 'delete' ? 'Delete Log' : 'Deployment Log';
-  const runningLabel = effectiveOp === 'delete' ? 'Deleting…' : 'Deploying…';
+  const logTitle = effectiveOp === 'delete' ? 'Delete Log' : effectiveOp === 'istio' ? 'Istio Install Log' : 'Deployment Log';
+  const runningLabel = effectiveOp === 'delete' ? 'Deleting…' : effectiveOp === 'istio' ? 'Installing Istio…' : 'Deploying…';
 
   return (
     <div className="space-y-4 p-6">
@@ -208,6 +221,11 @@ export function ClusterManager() {
             {status?.apiReady && (
               <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
                 <CheckCircle className="h-3 w-3" /> API server reachable
+              </div>
+            )}
+            {status?.istioReady && (
+              <div className="flex items-center gap-1.5 text-xs text-purple-600 dark:text-purple-400">
+                <ShieldCheck className="h-3 w-3" /> Istio ambient ready
               </div>
             )}
           </CardContent>
@@ -267,6 +285,34 @@ export function ClusterManager() {
         </Card>
       </div>
 
+      {/* ── Profile selector ─────────────────────────────────── */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground">Profile:</span>
+        <button
+          onClick={() => setProfile('lite')}
+          className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+            profile === 'lite'
+              ? 'bg-primary text-primary-foreground border-primary ring-2 ring-primary/40'
+              : 'bg-secondary text-secondary-foreground border-border hover:bg-accent hover:text-accent-foreground'
+          }`}
+        >
+          {profile === 'lite' && <span className="mr-1">✓</span>}Lite · 2 CPU · 4 Gi
+        </button>
+        <button
+          onClick={() => setProfile('full')}
+          className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+            profile === 'full'
+              ? 'bg-primary text-primary-foreground border-primary ring-2 ring-primary/40'
+              : 'bg-secondary text-secondary-foreground border-border hover:bg-accent hover:text-accent-foreground'
+          }`}
+        >
+          {profile === 'full' && <span className="mr-1">✓</span>}Full · 4 CPU · 8 Gi
+        </button>
+        {isRunning && (
+          <span className="text-xs text-muted-foreground">(applies to next deploy)</span>
+        )}
+      </div>
+
       {/* ── Controls ─────────────────────────────────────────── */}
       <div className="flex items-center gap-3 flex-wrap">
         <Button
@@ -308,6 +354,18 @@ export function ClusterManager() {
             <Loader2 className="h-4 w-4 animate-spin" /> {runningLabel}
           </div>
         )}
+
+        {!isRunning && status?.state === 'done' && !status.istioReady && (
+          <Button onClick={startIstio} variant="outline" className="gap-2 text-purple-600 hover:text-purple-700 dark:text-purple-400">
+            <ShieldCheck className="h-4 w-4" /> Install Istio + nginx
+          </Button>
+        )}
+
+        {!isRunning && status?.istioReady && (
+          <span className="text-xs text-muted-foreground">
+            Istio ambient · <code className="bg-muted px-1 rounded">kubectl exec -n sample deploy/sleep -- curl nginx.sample</code>
+          </span>
+        )}
       </div>
 
       {/* ── About section ────────────────────────────────────── */}
@@ -324,7 +382,19 @@ export function ClusterManager() {
                 <li>Waits for VMs to boot and cloud-init to configure k3s</li>
                 <li>Waits for the k3s API server to respond and all nodes to be Ready</li>
               </ol>
-              <p className="text-xs">Each VM: <strong>2 CPU · 4Gi RAM · 17Gi disk</strong> (cloned from ubuntu-noble-dv)</p>
+              <p className="text-xs">
+                <strong>Lite profile:</strong> CP 2 CPU · 4 Gi &nbsp;|&nbsp; Worker 2 CPU · 4 Gi &nbsp;—&nbsp; low resource use<br/>
+                <strong>Full profile:</strong> CP 4 CPU · 8 Gi &nbsp;|&nbsp; Worker 4 CPU · 6 Gi &nbsp;—&nbsp; ~2–4 min faster spin-up
+              </p>
+              <p className="font-medium text-foreground mt-2">What Install Istio + nginx does:</p>
+              <ol className="list-decimal list-inside space-y-1.5 text-xs">
+                <li>Downloads istioctl v1.24.3 (cached after first run)</li>
+                <li>Installs Gateway API CRDs on the target cluster</li>
+                <li>Installs Istio ambient profile with k3s CNI overrides</li>
+                <li>Waits for istiod · istio-cni-node · ztunnel DaemonSets to be ready</li>
+                <li>Deploys nginx + sleep pods in namespace <code className="bg-muted px-1 rounded">sample</code> (ambient mesh, no sidecars)</li>
+              </ol>
+              <p className="text-xs mt-1">Both profiles support Istio ambient — Lite has ~1.35 CPU and ~2.8 Gi headroom on the CP node.</p>
               <p className="font-medium text-foreground mt-2">What Delete Cluster does:</p>
               <ol className="list-decimal list-inside space-y-1.5 text-xs">
                 <li>Deletes the CAPI Cluster resource — triggers cascading deletion</li>

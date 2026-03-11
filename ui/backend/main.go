@@ -15,6 +15,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		allowedOrigins := []string{
 			"http://localhost:5173",
 			"http://127.0.0.1:5173",
+			"http://172.18.255.211",
 		}
 
 		for _, allowed := range allowedOrigins {
@@ -51,12 +52,13 @@ func main() {
 	// Cluster status (management cluster)
 	mux.HandleFunc("/api/v1/cluster/status", handlers.HandleClusterStatus)
 
-	// Target cluster deployment / deletion
+	// Target cluster deployment / deletion / Istio
 	mux.HandleFunc("/api/v1/cluster/deploy", handlers.HandleDeployCluster)
 	mux.HandleFunc("/api/v1/cluster/deploy/logs", handlers.HandleDeployLogs)
 	mux.HandleFunc("/api/v1/cluster/delete", handlers.HandleDeleteClusterStream)
 	mux.HandleFunc("/api/v1/cluster/target-status", handlers.HandleTargetClusterStatus)
 	mux.HandleFunc("/api/v1/cluster/target-delete", handlers.HandleDeleteCluster)
+	mux.HandleFunc("/api/v1/cluster/istio", handlers.HandleIstioInstall)
 
 	// CDI image repository
 	mux.HandleFunc("/api/v1/images", handlers.HandleCDIImages)
@@ -83,6 +85,10 @@ func main() {
 			handlers.HandleVirtualMachines(w, r)
 		}
 	})
+
+	// Cross-cluster demo: live probing + failure simulation
+	mux.HandleFunc("/api/v1/cross-cluster/probe", handlers.HandleCrossClusterProbe)
+	mux.HandleFunc("/api/v1/cross-cluster/scale", handlers.HandleCrossClusterScale)
 
 	// AI Chat & Agents
 	mux.HandleFunc("/api/ai/chat", handlers.HandleAIChat)
