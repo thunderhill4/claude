@@ -27,15 +27,40 @@ func TestScanResultJSON(t *testing.T) {
 	if out.Tool != "terraform" {
 		t.Errorf("want tool=terraform, got %s", out.Tool)
 	}
+	if out.Filename != "main.tf" {
+		t.Errorf("Filename: want main.tf, got %s", out.Filename)
+	}
+	if out.DurationMs != 42 {
+		t.Errorf("DurationMs: want 42, got %d", out.DurationMs)
+	}
 }
 
-func TestFindingDefaults(t *testing.T) {
+func TestFindingJSON(t *testing.T) {
 	f := model.Finding{
-		ID:         "TF-NET-001",
-		Severity:   "critical",
-		Confidence: 1.0,
+		ID:          "TF-NET-001",
+		Severity:    "critical",
+		Category:    "network",
+		Resource:    "aws_security_group.web",
+		Title:       "Unrestricted ingress",
+		Description: "...",
+		Remediation: "Restrict CIDR",
+		Confidence:  0.95,
 	}
-	if f.Confidence != 1.0 {
-		t.Errorf("want confidence=1.0, got %f", f.Confidence)
+	b, err := json.Marshal(f)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out model.Finding
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ID != f.ID {
+		t.Errorf("ID: want %q, got %q", f.ID, out.ID)
+	}
+	if out.Severity != f.Severity {
+		t.Errorf("Severity: want %q, got %q", f.Severity, out.Severity)
+	}
+	if out.Confidence != f.Confidence {
+		t.Errorf("Confidence: want %f, got %f", f.Confidence, out.Confidence)
 	}
 }
