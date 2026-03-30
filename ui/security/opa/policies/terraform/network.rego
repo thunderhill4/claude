@@ -1,7 +1,5 @@
 package terraform.network
 
-import future.keywords.if
-import future.keywords.contains
 
 findings contains finding if {
     resource := input.resource
