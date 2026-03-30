@@ -6,6 +6,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/open-policy-agent/opa v1.15.0
 	github.com/zclconf/go-cty v1.18.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
