@@ -128,3 +128,66 @@ export interface RegistryConfig {
   name: string;
   status: 'connected' | 'disconnected';
 }
+
+// ── Security Agent ──────────────────────────────────────────────────────────
+
+export interface SecurityFinding {
+  id: string;
+  rule_id: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
+  title: string;
+  description: string;
+  remediation: string;
+  tool: string;
+  resource: string;
+  filename: string;
+  line: number;
+  confidence: number;
+  llm_analysis?: string;
+}
+
+export interface ScanResult {
+  tool: string;
+  filename: string;
+  findings: SecurityFinding[];
+  duration_ms: number;
+}
+
+export interface FileInput {
+  filename: string;
+  content: string;
+}
+
+export interface ScanRequest {
+  files: FileInput[];
+  tool: string;
+  use_llm: boolean;
+  llm_model?: string;
+}
+
+export interface RegistryScanRequest {
+  registry_url: string;
+  insecure: boolean;
+  username?: string;
+  password?: string;
+}
+
+export interface RegistryScanResult {
+  registry_url: string;
+  findings: SecurityFinding[];
+  images_scanned: number;
+  duration_ms: number;
+  scanned_at: string;
+}
+
+export interface RuleInfo {
+  id: string;
+  title: string;
+  policy: string;
+  tool: string;
+}
+
+export interface RulesResponse {
+  rules: RuleInfo[];
+  total: number;
+}

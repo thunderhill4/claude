@@ -1,4 +1,4 @@
-import type { KubeNode, Pod, VirtualMachine, KubeEvent, ClusterStatus, Namespace, DeployLogEntry, TargetClusterStatus, DVImage, RegistryImage, RegistryConfig } from './types';
+import type { KubeNode, Pod, VirtualMachine, KubeEvent, ClusterStatus, Namespace, DeployLogEntry, TargetClusterStatus, DVImage, RegistryImage, RegistryConfig, ScanRequest, ScanResult, RegistryScanRequest, RegistryScanResult, RulesResponse } from './types';
 
 const BASE = '/api/v1';
 
@@ -171,3 +171,31 @@ export const api = {
     }
   },
 };
+
+// ── Security API ─────────────────────────────────────────────────────────────
+
+export async function scanFiles(req: ScanRequest): Promise<ScanResult[]> {
+  const res = await fetch(`${BASE}/security/scan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`scan failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function scanRegistry(req: RegistryScanRequest): Promise<RegistryScanResult> {
+  const res = await fetch(`${BASE}/security/scan/registry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`registry scan failed: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getSecurityRules(): Promise<RulesResponse> {
+  const res = await fetch(`${BASE}/security/rules`);
+  if (!res.ok) throw new Error(`rules fetch failed: ${res.statusText}`);
+  return res.json();
+}
