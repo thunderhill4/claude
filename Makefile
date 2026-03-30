@@ -1,4 +1,4 @@
-.PHONY: all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full verify clean ui ui-build registry bake-image demo help pre-pull istio
+.PHONY: all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full verify clean ui ui-build registry bake-image demo help pre-pull istio security-agent security-agent-build security-policies security-deploy
 
 REGISTRY_URL := 172.18.0.2:5000
 CONTAINER_IMAGE := $(REGISTRY_URL)/ubuntu-noble-k3s:latest
@@ -32,6 +32,12 @@ help:
 	@echo "Web UI:"
 	@echo "  make ui             - Run the web UI (frontend + backend)"
 	@echo "  make ui-build       - Build the UI for production"
+	@echo ""
+	@echo "Security Agent:"
+	@echo "  make security-agent       - Run security agent in development mode (port 8082)"
+	@echo "  make security-agent-build - Build security agent binary"
+	@echo "  make security-policies    - Regenerate OPA policies ConfigMap in kubeui namespace"
+	@echo "  make security-deploy      - Build and deploy security agent to cluster2"
 	@echo ""
 
 prereqs:
@@ -97,3 +103,20 @@ ui-build:
 	cd ui/frontend && npm install && npm run build
 	cd ui/backend && go build -o ../dist/backend .
 	@echo "UI built to ui/dist/"
+
+# ── Security Agent ────────────────────────────────────────────
+
+security-agent: ## Run security agent in development mode (port 8082)
+	cd ui/security && OPA_POLICIES_DIR=./opa/policies go run .
+
+security-agent-build: ## Build security agent binary
+	cd ui/security && CGO_ENABLED=0 GOOS=linux go build -o ../../bin/security-agent .
+
+security-policies: ## Regenerate OPA policies ConfigMap in kubeui namespace
+	kubectl create configmap opa-policies \
+		--from-file=ui/security/opa/policies/ \
+		-n kubeui --dry-run=client -o yaml | \
+		kubectl apply -f -
+
+security-deploy: ## Build and deploy security agent to cluster2
+	bash ui/k8s/build-and-deploy-security.sh

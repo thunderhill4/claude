@@ -15,8 +15,8 @@ SECURITY_AGENT_URL="${SECURITY_AGENT_URL:-http://localhost:8082}"
 
 cleanup() {
     echo "Shutting down..."
-    kill $BACKEND_PID $FRONTEND_PID 2>/dev/null
-    wait $BACKEND_PID $FRONTEND_PID 2>/dev/null
+    kill $BACKEND_PID $FRONTEND_PID ${SECURITY_PID:-} 2>/dev/null
+    wait $BACKEND_PID $FRONTEND_PID ${SECURITY_PID:-} 2>/dev/null
     echo "Done."
 }
 trap cleanup EXIT INT TERM
@@ -33,6 +33,15 @@ SECURITY_AGENT_URL="$SECURITY_AGENT_URL" \
 CLAUDE_DIR="$SCRIPT_DIR" \
 go run . &
 BACKEND_PID=$!
+
+# Optional: start security agent
+if [[ "${RUN_SECURITY_AGENT:-}" == "1" ]]; then
+  echo "Starting security agent on :8082..."
+  cd "$SCRIPT_DIR/ui/security"
+  OPA_POLICIES_DIR=./opa/policies go run . &
+  SECURITY_PID=$!
+  cd "$SCRIPT_DIR"
+fi
 
 # Start the Vite frontend dev server
 echo "Starting frontend on :5173..."
