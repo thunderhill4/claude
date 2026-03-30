@@ -1,4 +1,4 @@
-import { LayoutDashboard, Server, Box, Monitor, CalendarClock, Layers, HardDrive, Database } from 'lucide-react';
+import { LayoutDashboard, Server, Box, Monitor, CalendarClock, Layers, HardDrive, Database, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
@@ -10,6 +10,7 @@ const navItems = [
   { label: 'Target Cluster', icon: Layers, path: 'cluster' },
   { label: 'Registry', icon: Database, path: 'registry' },
   { label: 'Image Repo', icon: HardDrive, path: 'images' },
+  { label: 'Security', icon: Shield, path: 'security' },
 ];
 
 interface SidebarProps {

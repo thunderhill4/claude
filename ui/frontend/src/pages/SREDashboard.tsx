@@ -6,6 +6,7 @@ import { EventList } from '@/components/sre/EventList';
 import { ClusterManager } from '@/components/sre/ClusterManager';
 import { Registry } from '@/components/sre/Registry';
 import { ImageRepo } from '@/components/sre/ImageRepo';
+import { SecurityScanner } from '@/components/security/SecurityScanner';
 
 interface SREDashboardProps {
   activePath: string;
@@ -30,6 +31,8 @@ export function SREDashboard({ activePath, namespace }: SREDashboardProps) {
       return <Registry />;
     case 'images':
       return <ImageRepo />;
+    case 'security':
+      return <SecurityScanner />;
     default:
       return <Dashboard />;
   }
