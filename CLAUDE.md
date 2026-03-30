@@ -43,11 +43,13 @@ Pool: `172.18.255.200–210` (cluster1), `172.18.255.211–220` (cluster2)
 |-----------------|--------------------------------|-------------------------------------|
 | 172.18.255.200  | httpbin-lb (mc-demo, cluster1) | cross-cluster demo manifests        |
 | 172.18.255.211  | kubeui-frontend                | `ui/k8s/kubeui.yaml`                |
-| 172.18.255.212  | kagent k8s-agent               | `kagent-lb-setup.sh`                |
+| 172.18.255.212  | kagent-ui (web dashboard)      | kagent install (pre-assigned)       |
 | 172.18.255.213  | kagent-controller              | `kagent-lb-setup.sh`                |
 | 172.18.255.214  | target-cluster-agent           | `kagent-lb-setup.sh`                |
 | 172.18.255.215  | target-cluster API server      | `03-target-cluster/target-cluster.yaml` |
 | 172.18.255.216  | target-cluster-nginx proxy     | cross-cluster demo                  |
+| 172.18.255.217  | security-agent                 | `ui/k8s/security-agent.yaml`        |
+| 172.18.255.218  | kagent k8s-agent (A2A API)     | `kagent-lb-setup.sh`                |
 | 172.18.255.217–220 | free                        |                                     |
 
 **Critical:** Never reassign the IPs above without updating the corresponding source file AND `kagent-lb-setup.sh` AND `run-ui.sh`.

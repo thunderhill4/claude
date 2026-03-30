@@ -25,7 +25,7 @@ patch_svc() {
     fi
 }
 
-patch_svc "k8s-agent"            "172.18.255.212" "8080"
+patch_svc "k8s-agent"            "172.18.255.218" "8080"
 patch_svc "kagent-controller"    "172.18.255.213" "8083"
 patch_svc "target-cluster-agent" "172.18.255.214" "8080"
 
