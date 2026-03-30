@@ -58,11 +58,7 @@ func extractAttributes(body *hclsyntax.Body) map[string]any {
 		blockGroups[block.Type] = append(blockGroups[block.Type], nested)
 	}
 	for k, v := range blockGroups {
-		if len(v) == 1 {
-			attrs[k] = v[0]
-		} else {
-			attrs[k] = v
-		}
+		attrs[k] = v
 	}
 	return attrs
 }

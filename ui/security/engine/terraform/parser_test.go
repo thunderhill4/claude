@@ -36,10 +36,17 @@ func TestParseTerraformResources(t *testing.T) {
 	if r.Tool != "terraform" {
 		t.Errorf("want tool=terraform, got %s", r.Tool)
 	}
-	// Verify ctyToGo properly converts string values (not "cty.StringVal(...)")
-	ingress, ok := r.Attributes["ingress"].(map[string]any)
+	// Nested blocks are always stored as []any to support policies that iterate over them.
+	ingressList, ok := r.Attributes["ingress"].([]any)
 	if !ok {
-		t.Fatalf("ingress should be map[string]any, got %T", r.Attributes["ingress"])
+		t.Fatalf("ingress should be []any, got %T", r.Attributes["ingress"])
+	}
+	if len(ingressList) == 0 {
+		t.Fatal("ingress list should have at least one element")
+	}
+	ingress, ok := ingressList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("ingress[0] should be map[string]any, got %T", ingressList[0])
 	}
 	cidrBlocks, ok := ingress["cidr_blocks"].([]any)
 	if !ok {
