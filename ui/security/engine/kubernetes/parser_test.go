@@ -93,3 +93,11 @@ func TestParseMultiDoc(t *testing.T) {
 		t.Errorf("expected Pod and ConfigMap, got %v and %v", resources[0].Type, resources[1].Type)
 	}
 }
+
+func TestParseMalformedYAML(t *testing.T) {
+	malformed := []byte("kind: Pod\n  bad_indent:\nname: [unclosed")
+	_, err := k8sparser.Parse(malformed)
+	if err == nil {
+		t.Error("expected error for malformed YAML, got nil")
+	}
+}

@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"bytes"
 	"fmt"
+	"io"
 
 	"gopkg.in/yaml.v3"
 	"kubeui/security/model"
@@ -16,7 +17,10 @@ func Parse(content []byte) ([]model.Resource, error) {
 	for {
 		var raw map[string]any
 		if err := dec.Decode(&raw); err != nil {
-			break // io.EOF or parse error — stop
+			if err == io.EOF {
+				break
+			}
+			return resources, fmt.Errorf("yaml decode: %w", err)
 		}
 		if raw == nil {
 			continue
