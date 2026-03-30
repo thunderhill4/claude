@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"kubeui/backend/handlers"
@@ -90,6 +91,10 @@ func main() {
 	mux.HandleFunc("/api/v1/cross-cluster/probe", handlers.HandleCrossClusterProbe)
 	mux.HandleFunc("/api/v1/cross-cluster/scale", handlers.HandleCrossClusterScale)
 
+	// Security agent proxy
+	securityProxy := handlers.NewSecurityProxy()
+	mux.Handle("/api/v1/security/", securityProxy)
+
 	// AI Chat & Agents
 	mux.HandleFunc("/api/ai/chat", handlers.HandleAIChat)
 	mux.HandleFunc("/api/ai/agents", handlers.HandleListAgents)
@@ -105,6 +110,11 @@ func main() {
 		Handler: corsMiddleware(mux),
 	}
 
+	securityAgentURL := os.Getenv("SECURITY_AGENT_URL")
+	if securityAgentURL == "" {
+		securityAgentURL = "http://security-agent.kubeui.svc.cluster.local:8082"
+	}
+	log.Printf("Security agent URL: %s", securityAgentURL)
 	log.Println("Backend server starting on :8080")
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)

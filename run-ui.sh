@@ -11,6 +11,7 @@ KAGENT_AGENT="${KAGENT_AGENT_NAME:-k8s-agent}"
 KAGENT_AGENT_URL="${KAGENT_AGENT_URL:-http://172.18.255.212/}"
 KAGENT_CONTROLLER_URL="${KAGENT_CONTROLLER_URL:-http://172.18.255.213:8083/api/agents}"
 KAGENT_AGENT_URL_TARGET_CLUSTER_AGENT="${KAGENT_AGENT_URL_TARGET_CLUSTER_AGENT:-http://172.18.255.214/}"
+SECURITY_AGENT_URL="${SECURITY_AGENT_URL:-http://localhost:8082}"
 
 cleanup() {
     echo "Shutting down..."
@@ -28,6 +29,7 @@ KAGENT_CONTROLLER_URL="$KAGENT_CONTROLLER_URL" \
 KAGENT_AGENT_NAME="$KAGENT_AGENT" \
 KAGENT_AGENT_NAMESPACE="$KAGENT_NS" \
 KAGENT_AGENT_URL_TARGET_CLUSTER_AGENT="$KAGENT_AGENT_URL_TARGET_CLUSTER_AGENT" \
+SECURITY_AGENT_URL="$SECURITY_AGENT_URL" \
 CLAUDE_DIR="$SCRIPT_DIR" \
 go run . &
 BACKEND_PID=$!
@@ -44,6 +46,7 @@ echo "  Frontend: http://localhost:5173"
 echo "  Backend:  http://localhost:8080"
 echo "  kagent ($KAGENT_AGENT): ${KAGENT_AGENT_URL}"
 echo "  kagent controller:      ${KAGENT_CONTROLLER_URL}"
+echo "  Security agent:         ${SECURITY_AGENT_URL:-http://localhost:8082}"
 echo ""
 echo "Press Ctrl+C to stop."
 
