@@ -1,0 +1,106 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: security-agent
+  namespace: kubeui
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opa-policies
+  namespace: kubeui
+data:
+  # Populated by: kubectl create configmap opa-policies --from-file=ui/security/opa/policies/ -n kubeui --dry-run=client -o yaml
+  # Run: make security-policies to regenerate
+  placeholder: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-agent
+  namespace: kubeui
+  labels:
+    app: security-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: security-agent
+  template:
+    metadata:
+      labels:
+        app: security-agent
+    spec:
+      serviceAccountName: security-agent
+      containers:
+        - name: security-agent
+          image: 172.18.0.2:5000/security-agent:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8082
+          env:
+            - name: OPA_POLICIES_DIR
+              value: /policies
+            - name: LISTEN_ADDR
+              value: ":8082"
+          volumeMounts:
+            - name: opa-policies
+              mountPath: /policies
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8082
+            initialDelaySeconds: 3
+            periodSeconds: 5
+      volumes:
+        - name: opa-policies
+          configMap:
+            name: opa-policies
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-agent
+  namespace: kubeui
+  labels:
+    app: security-agent
+spec:
+  selector:
+    app: security-agent
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-agent-lb
+  namespace: kubeui
+  labels:
+    app: security-agent
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: "172.18.255.217"
+spec:
+  selector:
+    app: security-agent
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082
+  type: LoadBalancer

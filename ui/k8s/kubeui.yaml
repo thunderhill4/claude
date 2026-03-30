@@ -71,6 +71,8 @@ spec:
               value: "k8s-agent"
             - name: KAGENT_AGENT_NAMESPACE
               value: "kagent"
+            - name: SECURITY_AGENT_URL
+              value: "http://security-agent.kubeui.svc.cluster.local:8082"
           ports:
             - containerPort: 8080
               name: http
