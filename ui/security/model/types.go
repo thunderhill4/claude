@@ -28,11 +28,19 @@ type Finding struct {
 	Confidence  float64  `json:"confidence"`
 }
 
+// FileInput represents a single file to scan.
+type FileInput struct {
+	Filename string `json:"filename"`
+	Content  string `json:"content"`
+}
+
 type ScanRequest struct {
-	Tool      string `json:"tool"`
-	Content   string `json:"content"`
-	Filename  string `json:"filename"`
-	LLMEnrich bool   `json:"llm_enrich"`
+	Tool      string      `json:"tool"`
+	Content   string      `json:"content,omitempty"`   // single-file compat
+	Filename  string      `json:"filename,omitempty"`  // single-file compat
+	Files     []FileInput `json:"files,omitempty"`     // multi-file (preferred)
+	LLMEnrich bool        `json:"llm_enrich,omitempty"`
+	UseLLM    bool        `json:"use_llm,omitempty"` // frontend alias
 }
 
 type ScanResult struct {

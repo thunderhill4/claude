@@ -25,7 +25,9 @@ func New(scanner *engine.Scanner, evaluator *opa.Evaluator, llmClient *llm.Clien
 }
 
 // HandleScan handles POST /scan
-// Parses the request body as model.ScanRequest, calls scanner.Scan, returns JSON ScanResult.
+// Accepts either single-file format {tool, content, filename, llm_enrich} or
+// multi-file format {tool, files:[{filename,content}], use_llm}.
+// Returns []ScanResult for multi-file requests, ScanResult for single-file.
 func (h *Handler) HandleScan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -36,9 +38,38 @@ func (h *Handler) HandleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Normalize: use_llm is the frontend alias for llm_enrich
+	if req.UseLLM {
+		req.LLMEnrich = true
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 
+	// Multi-file format: iterate over files, return array of results
+	if len(req.Files) > 0 {
+		var results []model.ScanResult
+		for _, f := range req.Files {
+			fileReq := model.ScanRequest{
+				Tool:      req.Tool,
+				Filename:  f.Filename,
+				Content:   f.Content,
+				LLMEnrich: req.LLMEnrich,
+			}
+			result, err := h.scanner.Scan(ctx, fileReq)
+			if err != nil {
+				log.Printf("scan error for %s: %v", f.Filename, err)
+				http.Error(w, "scan failed: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			results = append(results, result)
+		}
+		writeJSON(w, results)
+		return
+	}
+
+	// Single-file format: return single ScanResult
 	result, err := h.scanner.Scan(ctx, req)
 	if err != nil {
 		log.Printf("scan error: %v", err)
