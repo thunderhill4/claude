@@ -37,7 +37,7 @@ A multi-cluster Kubernetes platform that provisions target clusters as KubeVirt 
 │  │ KubeUI (Web Dashboard)                                          │ │
 │  │  Frontend: http://172.18.255.211 (or localhost:5173)            │ │
 │  │  Backend:  :8080                                                │ │
-│  │  Modes: SRE | AI (kagent) | Visual (Service Mesh)               │ │
+│  │  Modes: SRE | AI (Sympozium) | Visual (Service Mesh)            │ │
 │  └─────────────────────────────────────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────────────┘
 ```
@@ -99,7 +99,8 @@ make ui
 ├── bake-golden-image.sh         # Bake k3s golden VM image
 ├── build-containerdisk.sh       # Build container disk image
 ├── run-ui.sh                    # Launch UI (frontend + backend)
-├── kagent-lb-setup.sh           # MetalLB setup for kagent AI services
+├── sympozium-lb-setup.sh        # MetalLB setup for Sympozium AI serving Services
+├── 06-sympozium/                # Sympozium install + SympoziumInstance manifests
 ├── demo.sh                      # Interactive cluster demo
 ├── show-cluster.sh              # Display cluster status
 └── target-cluster-kubeconfig    # Target cluster kubeconfig
@@ -131,11 +132,11 @@ Pool: `172.18.255.200-210` (cluster1), `172.18.255.211-220` (cluster2)
 |----|---------|---------|
 | 172.18.255.200 | httpbin-lb (mc-demo) | cluster1 |
 | 172.18.255.211 | kubeui-frontend | cluster2 |
-| 172.18.255.212 | kagent k8s-agent | cluster2 |
-| 172.18.255.213 | kagent-controller | cluster2 |
-| 172.18.255.214 | target-cluster-agent | cluster2 |
+| 172.18.255.213 | cluster2-agent (Sympozium) | cluster2 |
+| 172.18.255.214 | target-cluster-agent (Sympozium) | cluster2 |
 | 172.18.255.215 | target-cluster API server | cluster2 |
 | 172.18.255.216 | target-cluster-nginx proxy | cluster2 |
+| 172.18.255.217 | security-agent | cluster2 |
 
 ## Golden Image
 
@@ -176,7 +177,7 @@ The KubeUI dashboard provides three operational modes:
 Cluster management dashboard for viewing nodes, pods, VMs, events, namespaces, CDI images, and container registry. Includes target cluster deployment/deletion and Istio installation via streaming logs.
 
 ### AI Mode
-AI-powered Kubernetes operations chat using kagent. Supports multiple agents (k8s-agent, target-cluster-agent) for natural language cluster queries and operations.
+AI-powered Kubernetes operations chat using Sympozium. Supports multiple agents (cluster2-agent, target-cluster-agent) for natural-language queries and operations across both the management cluster (CAPI, KubeVirt VMs, CDI) and the provisioned target cluster (deployments, pods, services, Istio workloads).
 
 ### Visual Mode
 Service mesh visualization with 7 views:
@@ -187,6 +188,23 @@ Service mesh visualization with 7 views:
 - **Observability**: Service inventory and Istio component health across all clusters
 - **Ambient Mesh**: ztunnel and istio-cni-node DaemonSet status, namespace enrollment
 - **Diagnostics**: Issue tracker and actionable recommendations
+
+#### Sample agents + demo
+
+Two purpose-built agents ship as a runnable usecase:
+
+- `cost-analyzer` (`172.18.255.218:8080`) — finds idle KubeVirt VMs and stops them on request
+- `incident-responder` (`172.18.255.219:8080`) — diagnoses stuck VMs and restarts them on request
+
+Both use local `llama3.2` via Ollama on the Kind host (`http://172.18.0.1:11434`) — no external LLM required.
+
+```bash
+make sympozium-demo        # stages a stopped VM, has the agent fix it,
+                           # then has the cost agent stop an idle one
+make sympozium-demo-clean  # restore stopped VMs and delete demo agents
+```
+
+If the first call times out, run `make sympozium-warm` to keep the model resident (Ollama unloads llama3.2 after idle; cold-start on CPU is ~30s).
 
 ### Running the UI
 
