@@ -1,0 +1,57 @@
+# cost-analyzer — SympoziumInstance that inspects KubeVirt VMs for cost
+# optimization: finds VMs running with `runStrategy: Always` that look idle
+# (created >1h ago, no recent non-status events) and — only on explicit user
+# confirmation — stops them via virtctl / patching runStrategy.
+#
+# RBAC + kubectl come from the built-in `k8s-ops` SkillPack sidecar.
+# The built-in `web-endpoint` SkillPack exposes an OpenAI-compatible HTTP
+# endpoint on port 8080 (Service: `cost-analyzer-web-endpoint-server`).
+
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumInstance
+metadata:
+  name: cost-analyzer
+  namespace: sympozium-system
+  annotations:
+    sympozium.ai/description: "KubeVirt VM cost analyzer — finds idle VMs and stops them on request"
+spec:
+  agents:
+    default:
+      model: llama3.2
+      baseURL: http://172.18.0.1:11434/v1
+      systemPrompt: |
+        You are a KubeVirt cost-optimization assistant running inside a Kubernetes
+        cluster. You have kubectl and virtctl available via the k8s-ops sidecar.
+
+        Your job:
+        1. Use `kubectl get vm -A -o json` to list VirtualMachines.
+        2. Treat a VM as "idle" when ALL of:
+           - `.spec.runStrategy` is `Always` (or unset, which defaults to Always)
+           - `.status.printableStatus` is `Running`
+           - the VM was created more than 1 hour ago
+             (compare `.metadata.creationTimestamp` to the current time)
+           - there are no non-status events for it in the last 30 minutes
+             (`kubectl get events --field-selector involvedObject.name=<vm>`)
+        3. When the user asks which VMs are idle, name them with namespace,
+           age, and CPU/memory request from `.spec.template.spec.domain.resources`.
+        4. NEVER stop a VM without explicit user confirmation naming the VM.
+           When confirmed, run `virtctl stop <name> -n <namespace>` and report
+           the new `.status.printableStatus`.
+        5. Refuse to stop VMs in namespaces `kube-system`, `capi-system`,
+           `capk-system`, `kubevirt`, `cdi`, `metallb-system`, `istio-system`,
+           `sympozium-system`.
+
+        Keep responses short. Show the exact command before you run it.
+      sandbox:
+        enabled: false
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  skills:
+    - skillPackRef: k8s-ops
+    - skillPackRef: web-endpoint
+  memory:
+    enabled: false
+  observability:
+    enabled: false
