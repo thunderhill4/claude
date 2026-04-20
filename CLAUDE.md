@@ -6,7 +6,7 @@ This repo provisions Kubernetes target clusters as KubeVirt VMs on a Kind-based 
 
 **Clusters:**
 - `cluster1` (Kind) — Istio ambient mesh with sample workloads (`httpbin`, `sleep`)
-- `cluster2` (Kind) — Management cluster running CAPI, KubeVirt, CDI, MetalLB, kagent
+- `cluster2` (Kind) — Management cluster running CAPI, KubeVirt, CDI, MetalLB, Sympozium
 - `target-cluster` — k3s cluster provisioned as KubeVirt VMs on cluster2 via CAPI
 
 ## Repository Structure
@@ -26,8 +26,9 @@ This repo provisions Kubernetes target clusters as KubeVirt VMs on a Kind-based 
 │   ├── frontend/          # React 19 + TypeScript + Tailwind v4 (port 5173)
 │   └── k8s/               # Kubernetes deployment manifests for the UI
 ├── Makefile               # All automation targets
-├── run-ui.sh              # Launch UI dev servers with kagent env vars
-├── kagent-lb-setup.sh     # Patch kagent services to LoadBalancer with MetalLB IPs
+├── 06-sympozium/          # Sympozium install + SympoziumInstance manifests
+├── run-ui.sh              # Launch UI dev servers with Sympozium env vars
+├── sympozium-lb-setup.sh  # Patch Sympozium serving Services to LoadBalancer with MetalLB IPs
 ├── bake-golden-image.sh   # Bake Ubuntu k3s golden VM image
 ├── build-containerdisk.sh # Build container disk image
 ├── demo.sh                # Interactive cluster demo
@@ -43,27 +44,29 @@ Pool: `172.18.255.200–210` (cluster1), `172.18.255.211–220` (cluster2)
 |-----------------|--------------------------------|-------------------------------------|
 | 172.18.255.200  | httpbin-lb (mc-demo, cluster1) | cross-cluster demo manifests        |
 | 172.18.255.211  | kubeui-frontend                | `ui/k8s/kubeui.yaml`                |
-| 172.18.255.212  | kagent-ui (web dashboard)      | kagent install (pre-assigned)       |
-| 172.18.255.213  | kagent-controller              | `kagent-lb-setup.sh`                |
-| 172.18.255.214  | target-cluster-agent           | `kagent-lb-setup.sh`                |
+| 172.18.255.212  | sympozium-apiserver (UI)       | `sympozium-lb-setup.sh`             |
+| 172.18.255.213  | cluster2-agent (Sympozium)     | `sympozium-lb-setup.sh`             |
+| 172.18.255.214  | target-cluster-agent (Sympozium) | `sympozium-lb-setup.sh`           |
 | 172.18.255.215  | target-cluster API server      | `03-target-cluster/target-cluster.yaml` |
 | 172.18.255.216  | target-cluster-nginx proxy     | cross-cluster demo                  |
 | 172.18.255.217  | security-agent                 | `ui/k8s/security-agent.yaml`        |
-| 172.18.255.218  | kagent k8s-agent (A2A API)     | `kagent-lb-setup.sh`                |
-| 172.18.255.217–220 | free                        |                                     |
+| 172.18.255.218  | cost-analyzer (Sympozium)      | `sympozium-lb-setup.sh`             |
+| 172.18.255.219  | incident-responder (Sympozium) | `sympozium-lb-setup.sh`             |
+| 172.18.255.220  | free                           |                                     |
 
-**Critical:** Never reassign the IPs above without updating the corresponding source file AND `kagent-lb-setup.sh` AND `run-ui.sh`.
+**Critical:** Never reassign the IPs above without updating the corresponding source file AND `sympozium-lb-setup.sh` AND `run-ui.sh`.
 
 ## Development Workflows
 
 ### Full Setup (from scratch)
 
 ```bash
-make all          # prereqs + metallb + capi-init + target-cluster
-make verify       # wait for VMs, then verify cluster health
-make istio        # install Istio ambient on target cluster
-./kagent-lb-setup.sh  # expose kagent services via MetalLB
-make ui           # launch web UI dev servers
+make all                # prereqs + metallb + capi-init + target-cluster
+make verify             # wait for VMs, then verify cluster health
+make istio              # install Istio ambient on target cluster
+make sympozium-install  # install cert-manager + Sympozium + agents on cluster2
+make sympozium-lb       # expose Sympozium serving Services via MetalLB
+make ui                 # launch web UI dev servers
 ```
 
 ### Cluster Lifecycle
@@ -81,7 +84,7 @@ make ui       # runs run-ui.sh — starts Go backend + Vite frontend with hot re
 make ui-build # production build: frontend to ui/dist, backend binary to ui/dist/backend
 ```
 
-The `run-ui.sh` script sets all kagent env vars and launches both servers:
+The `run-ui.sh` script sets all Sympozium env vars and launches both servers:
 - Frontend: `http://localhost:5173` (Vite dev server)
 - Backend: `http://localhost:8080` (Go `go run .`)
 
@@ -105,7 +108,7 @@ make registry     # inspect images in local registry at 172.18.0.2:5000
 
 **Three operational modes** (toggled via header; state in `useMode` hook):
 - `sre` — Cluster management dashboard
-- `ai` — AI chat via kagent agents
+- `ai` — AI chat via Sympozium agents
 - `visual` — Service mesh visualization
 
 **Key files:**
@@ -158,36 +161,37 @@ make registry     # inspect images in local registry at 172.18.0.2:5000
 | GET | `/api/v1/events?namespace=` | Events |
 | GET | `/api/v1/virtualmachines?namespace=` | All VMs |
 | GET | `/api/v1/virtualmachines/{ns}/{name}` | Single VM |
-| POST | `/api/ai/chat` | Proxy to kagent agent (SSE stream) |
-| GET | `/api/ai/agents` | List available kagent agents |
+| POST | `/api/ai/chat` | Proxy to Sympozium agent (SSE stream, OpenAI-compat) |
+| GET | `/api/ai/agents` | List available Sympozium agents (SympoziumInstance CRs) |
 | GET | `/healthz` | Health check |
 
 **CORS:** Allows `localhost:5173`, `127.0.0.1:5173`, `172.18.255.211`
 
 **Handler files:**
-- `handlers/ai.go` — A2A protocol proxy to kagent; SSE streaming
+- `handlers/ai.go` — OpenAI-compatible chat-completions proxy to Sympozium; SSE streaming
 - `handlers/cluster_deploy.go` — CAPI cluster lifecycle; streaming log manager
 - `handlers/resources.go` — Nodes, pods, VMs, events, namespaces
 - `handlers/cdi.go` — CDI DataVolume listing
 - `handlers/registry.go` — Container registry catalog + delete
 
-### AI Integration (kagent / A2A Protocol)
+### AI Integration (Sympozium / OpenAI Chat Completions)
 
-The backend proxies AI chat to kagent agents using the **A2A (Agent-to-Agent) JSON-RPC protocol** over SSE:
+The backend proxies AI chat to Sympozium agents via their OpenAI-compatible serving-mode endpoint:
 
-- Request method: `message/stream`
-- Agent URL resolution: env var `KAGENT_AGENT_URL_<NAME_UPPER>` → `KAGENT_AGENT_URL` (default agent) → in-cluster DNS
-- Agent list: fetched from kagent controller at `KAGENT_CONTROLLER_URL`
+- Endpoint: `POST <agent-base>/v1/chat/completions` with `stream: true`
+- Auth: `Authorization: Bearer $SYMPOZIUM_API_TOKEN` (optional; token comes from the `sympozium-ui-token` Secret created by Sympozium)
+- Agent URL resolution: env var `SYMPOZIUM_AGENT_URL_<NAME_UPPER>` → `SYMPOZIUM_AGENT_URL` (default agent) → in-cluster DNS `http://<name>-server.<namespace>.svc.cluster.local:8080/`
+- Agent list: backend queries the Kubernetes API for `SympoziumInstance` CRs in `$SYMPOZIUM_NAMESPACE` (serving-enabled only) via the dynamic client
 - Timeout: 120 seconds per request
 - SSE buffer: 256KB scanner buffer for large lines
 
 **Env vars for `run-ui.sh`:**
 ```
-KAGENT_AGENT_URL=http://172.18.255.212/
-KAGENT_CONTROLLER_URL=http://172.18.255.213:8083/api/agents
-KAGENT_AGENT_URL_TARGET_CLUSTER_AGENT=http://172.18.255.214/
-KAGENT_AGENT_NAME=k8s-agent
-KAGENT_AGENT_NAMESPACE=kagent
+SYMPOZIUM_NAMESPACE=sympozium-system
+SYMPOZIUM_DEFAULT_AGENT=cluster2-agent
+SYMPOZIUM_AGENT_URL=http://172.18.255.213:8080/
+SYMPOZIUM_AGENT_URL_TARGET_CLUSTER_AGENT=http://172.18.255.214:8080/
+SYMPOZIUM_API_TOKEN=<token from sympozium-ui-token Secret>
 CLAUDE_DIR=<repo root>
 ```
 
@@ -234,5 +238,5 @@ The UI is deployed to the `kubeui` namespace on cluster2 (`ui/k8s/kubeui.yaml`):
 - The backend uses `go run .` in development — no pre-compilation needed
 - The `CLAUDE_DIR` env var is passed to the backend so it can find repo scripts (e.g., for `kubectl apply`)
 - `target-cluster-kubeconfig` is a plain file in the repo root — used by `make istio` and verification scripts
-- If kagent services aren't reachable, run `./kagent-lb-setup.sh` to (re)patch them to LoadBalancer
+- If Sympozium serving Services aren't reachable, run `make sympozium-lb` to (re)patch them to LoadBalancer
 - `make pre-pull` dramatically speeds up VM provisioning by pre-loading the container disk on Kind nodes
