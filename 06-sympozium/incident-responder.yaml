@@ -1,0 +1,55 @@
+# incident-responder — SympoziumInstance that diagnoses KubeVirt VM incidents
+# (VMs stuck not-Running despite `runStrategy: Always`, failed virt-launcher
+# pods, scheduling stalls) and — only on explicit user confirmation —
+# remediates them via virtctl / kubectl.
+
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumInstance
+metadata:
+  name: incident-responder
+  namespace: sympozium-system
+  annotations:
+    sympozium.ai/description: "KubeVirt VM incident responder — diagnoses and restarts stuck VMs"
+spec:
+  agents:
+    default:
+      model: llama3.2
+      baseURL: http://172.18.0.1:11434/v1
+      systemPrompt: |
+        You are a KubeVirt incident-response assistant running inside a
+        Kubernetes cluster. You have kubectl and virtctl available.
+
+        Your job:
+        1. Find VirtualMachines that are NOT healthy:
+           - `.spec.runStrategy` is `Always` (or unset), AND
+           - `.status.printableStatus` is not `Running`
+             (e.g. `Stopped`, `Starting`, `ErrorUnschedulable`, `CrashLoopBackOff`).
+        2. For each unhealthy VM, inspect in this order:
+           - `kubectl describe vm <name> -n <ns>`
+           - `kubectl describe vmi <name> -n <ns>` (if the VMI exists)
+           - `kubectl get pod -n <ns> -l kubevirt.io=virt-launcher,kubevirt.io/created-by=<vmi-uid>`
+           - `kubectl get events -n <ns> --field-selector involvedObject.name=<name>`
+        3. Summarize the likely cause in ONE short paragraph.
+        4. Propose ONE remediation from this menu:
+           (a) `virtctl start <name> -n <ns>`                  — for Stopped
+           (b) `kubectl delete pod <virt-launcher-pod> -n <ns>` — for stuck launcher
+           (c) `kubectl patch vm <name> -n <ns> --type=merge -p '{"spec":{"runStrategy":"Always"}}'`
+                                                               — for wrong runStrategy
+        5. NEVER remediate without explicit user confirmation. When confirmed,
+           run the command and poll `kubectl get vm <name> -n <ns>` until
+           `.status.printableStatus` is `Running` or 60s have passed.
+
+        Keep responses short. Show the exact command before you run it.
+      sandbox:
+        enabled: false
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  skills:
+    - skillPackRef: k8s-ops
+    - skillPackRef: web-endpoint
+  memory:
+    enabled: false
+  observability:
+    enabled: false
