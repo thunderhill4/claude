@@ -101,19 +101,172 @@ warm_ollama() {
     bash "$REPO_ROOT/06-sympozium/ollama-warm.sh"
 }
 
-# Phases 5–7 appended in Task 6.
+# ---- chat helper ------------------------------------------------------------
+
+# Stream an OpenAI-compat chat completion and print the assistant text.
+# Usage: chat <base_url> <user_prompt>
+chat() {
+    local base="$1" prompt="$2"
+    local body
+    body=$(jq -nc --arg p "$prompt" '{
+        model: "default",
+        stream: true,
+        messages: [ {role: "user", content: $p} ]
+    }')
+
+    echo "  > $prompt"
+    echo "  ---"
+    curl -sN --max-time 150 "${base}/v1/chat/completions" \
+        -H 'Content-Type: application/json' \
+        -d "$body" \
+      | while IFS= read -r line; do
+            [[ "$line" == "data: [DONE]" ]] && break
+            [[ "$line" != data:* ]] && continue
+            payload="${line#data: }"
+            # Extract streaming content delta; ignore non-content chunks.
+            echo "$payload" | jq -r '.choices[0].delta.content // empty' 2>/dev/null
+        done
+    echo
+    echo "  ---"
+}
+
+# ---- phase 5: incident demo -------------------------------------------------
+
+pick_worker_vm() {
+    # First VM in any namespace matching target-cluster-md-* that is Running.
+    # Note: KubeVirt VMs live on the management cluster (cluster2), so we use
+    # the default kubeconfig here, not $TARGET_KUBECONFIG (which is the k3s
+    # API inside the VMs — not what we want for KubeVirt resources).
+    kubectl get vm -A -o json \
+      | jq -r '.items[]
+          | select(.metadata.name | startswith("target-cluster-md-"))
+          | select(.status.printableStatus == "Running")
+          | "\(.metadata.namespace)/\(.metadata.name)"' \
+      | head -n1
+}
+
+vm_status() {
+    local ns="$1" name="$2"
+    kubectl get vm "$name" -n "$ns" -o jsonpath='{.status.printableStatus}' 2>/dev/null || echo "Unknown"
+}
+
+incident_demo() {
+    log "Incident demo — stage a stopped worker VM, ask incident-responder to fix it"
+    local pair ns name
+    pair=$(pick_worker_vm)
+    [[ -n "$pair" ]] || die "no Running target-cluster-md-* worker VM found to stage"
+    ns="${pair%%/*}"; name="${pair##*/}"
+
+    echo "  staging incident: virtctl stop $name -n $ns"
+    virtctl stop "$name" -n "$ns"
+    STOPPED_VMS+=( "$ns/$name" )
+
+    # Wait until the VM is no longer Running.
+    for _ in $(seq 1 30); do
+        [[ "$(vm_status "$ns" "$name")" != "Running" ]] && break
+        sleep 1
+    done
+    echo "  VM $ns/$name status: $(vm_status "$ns" "$name")"
+
+    chat "$INCIDENT_URL" "A KubeVirt VM in my cluster looks stuck. Find any VM whose runStrategy is Always but status is not Running, explain why, and if it is safe, start it with virtctl. You may proceed without asking — this is an authorized repair."
+
+    echo "  polling for recovery (up to 90s)..."
+    for _ in $(seq 1 90); do
+        [[ "$(vm_status "$ns" "$name")" == "Running" ]] && break
+        sleep 1
+    done
+
+    local final
+    final=$(vm_status "$ns" "$name")
+    if [[ "$final" == "Running" ]]; then
+        echo "  ✓ VM $ns/$name is Running again"
+        # Agent recovered it — don't restore this one in cleanup.
+        STOPPED_VMS=( "${STOPPED_VMS[@]/$ns\/$name}" )
+    else
+        warn "VM $ns/$name did not recover (status=$final); will be restored by --restore"
+    fi
+}
+
+# ---- phase 6: cost demo -----------------------------------------------------
+
+pick_running_non_system_vm() {
+    # Any Running VM in non-system namespaces; skip whatever incident demo
+    # already touched so we don't double-dip.
+    kubectl get vm -A -o json \
+      | jq -r --argjson excl '["kube-system","capi-system","capk-system","kubevirt","cdi","metallb-system","istio-system","sympozium-system"]' '
+          .items[]
+          | select(.status.printableStatus == "Running")
+          | select(.metadata.namespace as $ns | ($excl | index($ns) | not))
+          | "\(.metadata.namespace)/\(.metadata.name)"' \
+      | head -n1
+}
+
+cost_demo() {
+    log "Cost demo — ask cost-analyzer to name an idle VM, then stop it"
+
+    echo "  current VMs:"
+    kubectl get vm -A -o wide | sed 's/^/    /'
+
+    chat "$COST_URL" "Which VMs in the cluster look idle and safe to stop to save cost? Name exactly one VM (namespace/name) and show the exact virtctl command you would run. Do not run anything yet."
+
+    local pair ns name
+    pair=$(pick_running_non_system_vm)
+    [[ -n "$pair" ]] || { warn "no Running non-system VM to stop; skipping apply phase"; return 0; }
+    ns="${pair%%/*}"; name="${pair##*/}"
+
+    chat "$COST_URL" "Go ahead and stop VM ${ns}/${name} now with virtctl. This is authorized."
+
+    echo "  polling for stop (up to 60s)..."
+    for _ in $(seq 1 60); do
+        local s; s=$(vm_status "$ns" "$name")
+        [[ "$s" == "Stopped" || "$s" == "Halted" ]] && break
+        sleep 1
+    done
+
+    local final; final=$(vm_status "$ns" "$name")
+    if [[ "$final" == "Stopped" || "$final" == "Halted" ]]; then
+        echo "  ✓ VM $ns/$name is $final"
+        STOPPED_VMS+=( "$ns/$name" )
+    else
+        warn "VM $ns/$name did not stop (status=$final)"
+    fi
+}
+
+# ---- phase 7: restore -------------------------------------------------------
+
+restore_stopped_vms() {
+    log "Restoring VMs stopped by this demo"
+    if (( ${#STOPPED_VMS[@]} == 0 )); then
+        # --restore mode: walk all non-system VMs currently Stopped and start them.
+        mapfile -t STOPPED_VMS < <(
+            kubectl get vm -A -o json \
+              | jq -r --argjson excl '["kube-system","capi-system","capk-system","kubevirt","cdi","metallb-system","istio-system","sympozium-system"]' '
+                  .items[]
+                  | select(.status.printableStatus == "Stopped" or .status.printableStatus == "Halted")
+                  | select(.metadata.namespace as $ns | ($excl | index($ns) | not))
+                  | "\(.metadata.namespace)/\(.metadata.name)"'
+        )
+    fi
+    for pair in "${STOPPED_VMS[@]}"; do
+        [[ -z "$pair" ]] && continue
+        local ns="${pair%%/*}" name="${pair##*/}"
+        echo "  virtctl start $name -n $ns"
+        virtctl start "$name" -n "$ns" || warn "failed to start $ns/$name"
+    done
+}
+
 main() {
     preflight
     if (( RESTORE_ONLY )); then
-        log "Restore-only mode: skipping deploy/demo phases"
-        # restore_stopped_vms (filled in Task 6)
+        restore_stopped_vms
         return 0
     fi
     deploy_agents
     expose_agents
     warm_ollama
-    echo
-    log "Phases 1–4 complete (incident + cost demo phases added in Task 6)"
+    incident_demo
+    cost_demo
+    log "Demo complete. To undo: $0 --restore"
 }
 
 main "$@"
