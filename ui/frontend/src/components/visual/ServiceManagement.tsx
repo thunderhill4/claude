@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Globe, Search, ArrowRightLeft, CheckCircle2, AlertCircle, Clock, ExternalLink } from 'lucide-react';
+import { Globe, Search, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 
 interface MeshService {
   name: string;

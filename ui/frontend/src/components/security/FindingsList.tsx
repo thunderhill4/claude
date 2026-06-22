@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import type { SecurityFinding, ScanResult } from '@/lib/types';
 import { SeverityBadge } from './SeverityBadge';
 import { FindingDetail } from './FindingDetail';

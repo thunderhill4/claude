@@ -1,4 +1,5 @@
 "use client"
+/* eslint-disable react-refresh/only-export-components -- vendored shadcn primitive co-locates its cva variants */
 
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"

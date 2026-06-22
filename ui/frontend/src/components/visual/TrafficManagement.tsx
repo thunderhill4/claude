@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Route, Shuffle, AlertTriangle, Globe, BarChart3, ArrowRight } from 'lucide-react';
+import { Route, ArrowRight } from 'lucide-react';
 
 interface TrafficRule {
   id: string;

@@ -1,4 +1,3 @@
-import React from 'react';
 import type { SecurityFinding } from '@/lib/types';
 
 type Severity = SecurityFinding['severity'];

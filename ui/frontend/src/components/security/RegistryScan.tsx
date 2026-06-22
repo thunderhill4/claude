@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Database, Loader2, Play } from 'lucide-react';
 import type { RegistryScanResult } from '@/lib/types';
 import { scanRegistry } from '@/lib/api';
