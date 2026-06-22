@@ -1,9 +1,10 @@
-.PHONY: all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full target-cluster-preinit target-cluster-lite-preinit target-cluster-full-preinit target-cluster-lite-minimal target-cluster-full-minimal verify clean ui ui-build registry bake-image bake-image-preinit bake-image-minimal-preinit build-containerdisk-preinit build-containerdisk-minimal-preinit demo help pre-pull pre-pull-preinit pre-pull-minimal-preinit time-to-ready istio security-agent security-agent-build security-policies security-deploy sympozium-install sympozium-lb sympozium-demo-agents sympozium-warm sympozium-demo sympozium-demo-clean
+.PHONY: all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full target-cluster-parallel target-cluster-preinit target-cluster-lite-preinit target-cluster-full-preinit target-cluster-lite-minimal target-cluster-full-minimal verify clean ui ui-build registry bake-image bake-image-preinit bake-image-minimal-preinit build-containerdisk-preinit build-containerdisk-minimal-preinit demo help registry-fix pre-pull pre-pull-preinit pre-pull-minimal-preinit bake-image-warm build-containerdisk-warm pre-pull-warm target-cluster-warm time-to-ready time-to-ready-warm istio security-agent security-agent-build security-policies security-deploy sympozium-install sympozium-lb sympozium-pack-install sympozium-pack-uninstall sympozium-demo-agents sympozium-warm sympozium-demo sympozium-demo-clean
 
 REGISTRY_URL := 172.18.0.2:5000
 CONTAINER_IMAGE := $(REGISTRY_URL)/ubuntu-noble-k3s:latest
 PREINIT_IMAGE := $(REGISTRY_URL)/ubuntu-noble-k3s:preinit
 MINIMAL_PREINIT_IMAGE := $(REGISTRY_URL)/ubuntu-minimal-k3s:preinit
+WARM_IMAGE := $(REGISTRY_URL)/ubuntu-noble-k3s:warm
 KIND_NODES := $(shell docker ps --filter "name=cluster2" --format '{{.Names}}')
 
 all: prereqs metallb capi-init target-cluster
@@ -16,6 +17,7 @@ help:
 	@echo "  make target-cluster               - Deploy target cluster (full profile, legacy :latest)"
 	@echo "  make target-cluster-lite          - Legacy lite (2 CPU · 4Gi, :latest image)"
 	@echo "  make target-cluster-full          - Legacy full (4 CPU · 8/6Gi, :latest image)"
+	@echo "  make target-cluster-parallel      - Full profile, worker boots in parallel (~61s, demo)"
 	@echo "  make target-cluster-lite-preinit  - Templated lite on Noble :preinit (sub-60s target)"
 	@echo "  make target-cluster-full-preinit  - Templated full on Noble :preinit"
 	@echo "  make target-cluster-lite-minimal  - Templated lite on Minimal :preinit"
@@ -58,6 +60,8 @@ help:
 	@echo "Sympozium (AI backend):"
 	@echo "  make sympozium-install     - Install cert-manager + Sympozium + agents on cluster2"
 	@echo "  make sympozium-lb          - Patch Sympozium serving Services to LoadBalancer via MetalLB"
+	@echo "  make sympozium-pack-install   - Apply Phase-0 core bundle (policies + warm schedule + cluster2-agent)"
+	@echo "  make sympozium-pack-uninstall - Remove Phase-0 core bundle"
 	@echo "  make sympozium-demo-agents - Apply cost-analyzer + incident-responder + patch LBs"
 	@echo "  make sympozium-warm        - Keep Ollama llama3.2 resident (fixes cold-start)"
 	@echo "  make sympozium-demo        - Run end-to-end Sympozium demo (agent fixes a stuck VM)"
@@ -77,11 +81,17 @@ target-cluster: target-cluster-full
 
 # Legacy: static YAML, :latest containerDisk. Kept for rollback during Phase
 # 1+2 verification. Flip to :preinit variants once Phase 1 gate passes.
-target-cluster-lite:
+target-cluster-lite: registry-fix
 	kubectl apply -f 03-target-cluster/target-cluster-lite.yaml
 
-target-cluster-full:
+target-cluster-full: registry-fix
 	kubectl apply -f 03-target-cluster/target-cluster.yaml
+
+# Parallel-boot variant: pre-seeded token + static worker bootstrap + skipped
+# preflight check so the worker VM boots alongside the control plane instead of
+# waiting for it (~125s -> ~61s end-to-end). Static token, demo use only.
+target-cluster-parallel: registry-fix
+	kubectl apply -f 03-target-cluster/target-cluster-parallel.yaml
 
 # Templated, :preinit containerDisk. Mirrors the backend's render path.
 target-cluster-lite-preinit:
@@ -159,8 +169,45 @@ pre-pull-minimal-preinit:
 target-cluster-preinit:
 	kubectl apply -f 03-target-cluster/target-cluster-preinit-test.yaml
 
+# ── Warm path (fixed CA + token, no --cluster-reset) — target <40s ──────────
+# Order: bake-image-warm -> build-containerdisk-warm -> pre-pull-warm
+#        -> target-cluster-warm (seeds secrets, then applies the manifest).
+bake-image-warm:
+	BAKE_MODE=warm \
+	DV_TARGET=ubuntu-noble-k3s-warm \
+	VM_NAME=ubuntu-bake-vm-warm \
+	TARGET_IMAGE=localhost:5000/ubuntu-noble-k3s:warm \
+	./bake-golden-image.sh
+
+build-containerdisk-warm:
+	DV_SOURCE=ubuntu-noble-k3s-warm \
+	IMAGE_NAME=localhost:5000/ubuntu-noble-k3s:warm \
+	HELPER_POD=disk-extractor-warm \
+	WORK_DIR=/tmp/containerdisk-build-warm \
+	./build-containerdisk.sh
+
+pre-pull-warm: registry-fix
+	@echo "Pre-pulling $(WARM_IMAGE) on Kind nodes..."
+	@for node in $(KIND_NODES); do \
+		echo "  Pulling on $$node..."; \
+		docker exec $$node crictl pull $(WARM_IMAGE) 2>/dev/null || \
+		docker exec $$node ctr -n k8s.io images pull --plain-http $(WARM_IMAGE) 2>/dev/null || \
+		echo "    (pull command not available on $$node)"; \
+	done
+	@echo "Done."
+
+# Seeds the fixed CA/token secrets (so KThrees adopts them), then applies the
+# warm manifest. Tear down any existing target-cluster first (single-cluster).
+target-cluster-warm: registry-fix
+	./scripts/seed-cluster-secrets.sh
+	kubectl apply -f 03-target-cluster/target-cluster-warm.yaml
+
 time-to-ready:
 	./scripts/time-to-ready.sh
+
+time-to-ready-warm:
+	./scripts/seed-cluster-secrets.sh
+	./scripts/time-to-ready.sh 03-target-cluster/target-cluster-warm.yaml 2
 
 registry:
 	@echo "Container Registry: http://$(REGISTRY_URL)"
@@ -171,7 +218,10 @@ registry:
 	@echo "Tags for ubuntu-noble-k3s:"
 	@curl -s http://$(REGISTRY_URL)/v2/ubuntu-noble-k3s/tags/list | jq -r '.tags[]' 2>/dev/null || echo "  (image not found)"
 
-pre-pull:
+registry-fix:
+	@./scripts/fix-registry-hosts.sh
+
+pre-pull: registry-fix
 	@echo "Pre-pulling $(CONTAINER_IMAGE) on Kind nodes..."
 	@for node in $(KIND_NODES); do \
 		echo "  Pulling on $$node..."; \
@@ -220,7 +270,13 @@ sympozium-demo-agents: ## Apply cost-analyzer + incident-responder CRs and patch
 	kubectl apply -f 06-sympozium/cost-analyzer.yaml -f 06-sympozium/incident-responder.yaml
 	bash sympozium-lb-setup.sh
 
-sympozium-warm: ## Keep Ollama llama3.2 resident
+sympozium-pack-install: ## Apply Phase-0 core bundle (policies + warm schedule + cluster2-agent)
+	kubectl apply -k 06-sympozium/
+
+sympozium-pack-uninstall: ## Remove Phase-0 core bundle
+	kubectl delete -k 06-sympozium/ --ignore-not-found
+
+sympozium-warm: ## Manual warm fallback (canonical path is the ollama-warm SympoziumSchedule in the core bundle)
 	bash 06-sympozium/ollama-warm.sh
 
 sympozium-demo: ## Run end-to-end Sympozium demo (agent fixes a stuck VM)
