@@ -14,11 +14,13 @@
 # first boot — so no cert purge and no `k3s server --cluster-reset`. That is the
 # whole point of the warm path (see docs/sub-60s-cluster-strategy.md).
 #
-# DEMO ONLY: the output under 03-target-cluster/warm-ca/ is committed. Anyone
-# with it holds cluster-admin material for target-cluster. This matches the
-# existing posture of the static token in target-cluster-parallel.yaml.
+# The output under 03-target-cluster/warm-ca/ is gitignored and MUST NOT be
+# committed — these are cluster-admin CA private keys for target-cluster. Each
+# environment generates its own set locally; they are consumed in place by the
+# bake (BAKE_MODE=warm) and seed (scripts/seed-cluster-secrets.sh) steps.
 #
-# Run once; commit the output. Re-run only to rotate (then re-bake + re-seed).
+# Run once per environment, then bake + seed. Re-run with FORCE=1 to rotate
+# (then re-bake + re-seed). Never check the generated material into git.
 #
 # Files produced (mirrors k3s's own tls/ layout):
 #   server-ca.{crt,key}          — signs the kube-apiserver serving cert

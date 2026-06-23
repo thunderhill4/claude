@@ -1,2 +1,21 @@
+# Kubeconfigs / cluster credentials (never commit)
 target-cluster-kubeconfig
+
+# Generated CA material — run `scripts/gen-warm-ca.sh` to (re)create locally.
+# Private keys must never be committed; each environment gets its own CA set.
+03-target-cluster/warm-ca/
+
+# Compiled Go binaries / build output
+ui/backend/backend
+ui/backend/kubeui-backend
+ui/k8s/security-agent
+ui/dist/
+
+# Local scratch notes
+url
+
+# Logs
+*.log
+
+# Worktrees
 .worktrees/
