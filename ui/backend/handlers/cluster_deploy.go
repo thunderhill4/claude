@@ -320,7 +320,15 @@ func waitForTargetReady(expectedVMs int) error {
 				running++
 			}
 		}
-		deploy.addLog("info", fmt.Sprintf("  VMIs: %d/%d Running", running, total))
+		dvOut := kubectlGet("get", "dv",
+			"-l", "cluster.x-k8s.io/cluster-name="+targetClusterName,
+			"--no-headers", "--ignore-not-found")
+		dvCount := countNonEmpty(dvOut)
+		if dvCount > 0 || total == 0 {
+			deploy.addLog("info", fmt.Sprintf("  DataVolumes cloning: %d | VMIs: %d/%d Running", dvCount, running, total))
+		} else {
+			deploy.addLog("info", fmt.Sprintf("  VMIs: %d/%d Running", running, total))
+		}
 		if running >= expectedVMs {
 			break
 		}
@@ -360,7 +368,7 @@ func waitForTargetReady(expectedVMs int) error {
 
 	nodesTimeout := time.Now().Add(3 * time.Minute)
 	for {
-		if targetNodesReady(2) {
+		if targetNodesReady(expectedVMs) {
 			deploy.addLog("success", "✓ All nodes are Ready")
 			break
 		}

@@ -108,6 +108,16 @@ func (p *poolState) isBuilding() bool {
 	return p.building
 }
 
+func (p *poolState) claimAndSetBuilding() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.building {
+		return false
+	}
+	p.building = true
+	return true
+}
+
 func (p *poolState) snapshot() PoolStatus {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -210,12 +220,9 @@ func poolReconcileTick(ctx context.Context) {
 	opInFlight := getCurrentOp() != ""
 	switch reconcileDecision(exists, state, ready, opInFlight, pool.isBuilding()) {
 	case ActionBuild:
-		go buildStandby(false)
+		go buildStandby(false, false)
 	case ActionRebuild:
-		go func() {
-			_ = runShell("kubectl delete cluster " + targetClusterName + " --ignore-not-found --timeout=120s")
-			buildStandby(false)
-		}()
+		go buildStandby(false, true)
 	case ActionNone:
 		// nothing
 	}
@@ -223,11 +230,11 @@ func poolReconcileTick(ctx context.Context) {
 
 // buildStandby builds the standby cluster off the user's clock. If claimAfter
 // (or claimPending becomes set during the build) it labels CLAIMED, else WARM.
-func buildStandby(claimAfter bool) {
-	if pool.isBuilding() {
+// predelete=true tears down any existing (degraded) cluster before applying.
+func buildStandby(claimAfter bool, predelete bool) {
+	if !pool.claimAndSetBuilding() {
 		return
 	}
-	pool.setBuilding(true)
 	setCurrentOp("pool-build")
 	defer func() {
 		setCurrentOp("")
@@ -239,6 +246,10 @@ func buildStandby(claimAfter bool) {
 
 	deploy.resetForNewRun()
 	pool.setBuildState("building", "")
+	if predelete {
+		deploy.addLog("step", "━━ Rebuilding standby — tearing down degraded cluster ━━")
+		_ = runShell("kubectl delete cluster " + targetClusterName + " --ignore-not-found --timeout=120s")
+	}
 	deploy.addLog("step", "━━ Building warm standby cluster (background) ━━")
 
 	manifest := os.Getenv("POOL_STANDBY_MANIFEST")

@@ -1,6 +1,10 @@
 package handlers
 
-import "testing"
+import (
+	"sync"
+	"sync/atomic"
+	"testing"
+)
 
 func TestReconcileDecision(t *testing.T) {
 	cases := []struct {
@@ -61,5 +65,28 @@ func TestPoolSetBuildState(t *testing.T) {
 	p.setBuildState("building", "boom")
 	if s := p.snapshot(); s.State != "building" || s.LastError != "boom" {
 		t.Fatalf("after error: %+v", s)
+	}
+}
+
+func TestClaimAndSetBuildingExclusive(t *testing.T) {
+	p := &poolState{state: "none"}
+	const n = 50
+	var wins int64
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			if p.claimAndSetBuilding() {
+				atomic.AddInt64(&wins, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if wins != 1 {
+		t.Fatalf("expected exactly 1 winner, got %d", wins)
+	}
+	if !p.isBuilding() {
+		t.Fatal("building flag should be set after a win")
 	}
 }
