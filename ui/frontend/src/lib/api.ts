@@ -1,4 +1,4 @@
-import type { KubeNode, Pod, VirtualMachine, KubeEvent, ClusterStatus, Namespace, DeployLogEntry, TargetClusterStatus, DVImage, RegistryImage, RegistryConfig, ScanRequest, ScanResult, RegistryScanRequest, RegistryScanResult, RulesResponse, ChatEnvelope, Proposal } from './types';
+import type { KubeNode, Pod, VirtualMachine, KubeEvent, ClusterStatus, Namespace, DeployLogEntry, TargetClusterStatus, DVImage, RegistryImage, RegistryConfig, ScanRequest, ScanResult, RegistryScanRequest, RegistryScanResult, RulesResponse, ChatEnvelope, Proposal, PoolStatus } from './types';
 
 const BASE = '/api/v1';
 
@@ -45,6 +45,7 @@ export const api = {
     return fetchJSON<DVImage[]>(`${BASE}/images${params}`);
   },
   getRegistryImages: () => fetchJSON<RegistryImage[]>(`${BASE}/registry/images`),
+  getPoolStatus: () => fetchJSON<PoolStatus>(`${BASE}/cluster/pool-status`),
   getRegistryConfig: () => fetchJSON<RegistryConfig>(`${BASE}/registry/config`),
   deleteRegistryImage: async (name: string, tag: string) => {
     const res = await fetch(`${BASE}/registry/images/${name}:${tag}`, { method: 'DELETE' });

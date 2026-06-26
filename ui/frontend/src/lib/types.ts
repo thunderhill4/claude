@@ -208,3 +208,9 @@ export interface RulesResponse {
   rules: RuleInfo[];
   total: number;
 }
+
+export interface PoolStatus {
+  state: 'none' | 'building' | 'warm' | 'claimed';
+  clusterReady: boolean;
+  lastError: string;
+}

@@ -92,6 +92,7 @@ export function ClusterManager() {
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [profile, setProfile] = useState<'lite' | 'full'>('full');
   const [imageVariant, setImageVariant] = useState<'warm' | 'noble' | 'minimal'>('warm');
+  const [poolStatus, setPoolStatus] = useState<'none' | 'building' | 'warm' | 'claimed'>('none');
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -115,6 +116,20 @@ export function ClusterManager() {
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
+
+  // Poll pool status
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const s = await api.getPoolStatus();
+        if (alive) setPoolStatus(s.state);
+      } catch { /* ignore */ }
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
   // Auto-attach when a run is already in progress on mount
   useEffect(() => {
@@ -291,6 +306,17 @@ export function ClusterManager() {
           </CardContent>
         </Card>
       </div>
+
+      {poolStatus === 'warm' && (
+        <div className="flex items-center gap-2 text-xs text-green-600">
+          <span>⚡ Standby ready — Deploy claims instantly</span>
+        </div>
+      )}
+      {poolStatus === 'building' && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Building standby… next Deploy will be instant once ready</span>
+        </div>
+      )}
 
       {/* ── Profile selector ─────────────────────────────────── */}
       <div className="flex items-center gap-2">
