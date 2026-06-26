@@ -222,6 +222,17 @@ SYMPOZIUM_API_TOKEN=<token from sympozium-ui-token Secret>
 CLAUDE_DIR=<repo root>
 ```
 
+### Warm Pool (pre-deployed standby)
+
+The backend keeps one `target-cluster` pre-built and labeled `pool.local/state=WARM`
+(reconcile goroutine in `ui/backend/handlers/pool.go`). Deploy **claims** a warm standby
+(relabel `CLAIMED`, synthetic SSE) in seconds instead of building (~50s). Delete tears
+down and the controller rebuilds a standby in the background. Invariant: at most one
+`target-cluster` at a time. Endpoint: `GET /api/v1/cluster/pool-status`
+→ `{state: none|building|warm|claimed, clusterReady, lastError}`. Disable with
+`POOL_ENABLED=false`. Standby builds via `target-cluster-parallel.yaml` (`:latest`);
+the on-demand fallback uses the warm image. Demo-only (fixed CA/token, single cluster).
+
 ## Infrastructure Conventions
 
 ### CAPI / KubeVirt

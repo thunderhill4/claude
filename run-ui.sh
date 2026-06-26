@@ -22,6 +22,12 @@ fi
 
 SECURITY_AGENT_URL="${SECURITY_AGENT_URL:-http://localhost:8082}"
 
+# Warm pool config for target-cluster pre-deployment
+export POOL_ENABLED="${POOL_ENABLED:-true}"
+export POOL_STANDBY_PROFILE="${POOL_STANDBY_PROFILE:-full}"
+export POOL_STANDBY_MANIFEST="${POOL_STANDBY_MANIFEST:-03-target-cluster/target-cluster-parallel.yaml}"
+export POOL_POLL_SECONDS="${POOL_POLL_SECONDS:-5}"
+
 cleanup() {
     echo "Shutting down..."
     kill $BACKEND_PID $FRONTEND_PID ${SECURITY_PID:-} 2>/dev/null
