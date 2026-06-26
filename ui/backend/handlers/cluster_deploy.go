@@ -541,12 +541,10 @@ func HandleDeployCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if deploy.getState() == "running" && getCurrentOp() == "pool-build" {
-		claimPending.Store(true)
+	if pool.isBuilding() {
+		claimPending.Store(true) // a standby build is in flight — claim it when it finishes
 	}
-
-	state := deploy.getState()
-	if state != "running" {
+	if deploy.getState() != "running" && !pool.isBuilding() {
 		profile := r.URL.Query().Get("profile")
 		if _, ok := profileSpecs[profile]; !ok {
 			profile = "full"

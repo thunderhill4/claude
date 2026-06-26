@@ -149,8 +149,7 @@ Env vars (set in `run-ui.sh`, defaults in code):
 | Var                    | Default  | Meaning                                            |
 |------------------------|----------|----------------------------------------------------|
 | `POOL_ENABLED`         | `true`   | Master switch. `false` → pure on-demand (today).   |
-| `POOL_STANDBY_PROFILE` | `full`   | Standby sizing (`full`=14Gi idle, `lite`=8Gi).     |
-| `POOL_STANDBY_MANIFEST`| `03-target-cluster/target-cluster-parallel.yaml` | Standby build source. |
+| `POOL_STANDBY_MANIFEST`| `03-target-cluster/target-cluster-parallel.yaml` | Standby build source. Standby sizing (CPU/memory) is controlled by the manifest file itself. |
 | `POOL_POLL_SECONDS`    | `5`      | Reconcile interval.                                |
 
 The on-demand *fallback* (no standby ready) uses the existing deploy default (`warm`),

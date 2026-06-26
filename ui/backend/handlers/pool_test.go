@@ -25,6 +25,7 @@ func TestReconcileDecision(t *testing.T) {
 		{"claimed -> none", true, poolStateClaimed, true, false, false, ActionNone},
 		{"claimed not ready -> none", true, poolStateClaimed, false, false, false, ActionNone},
 		{"unlabeled existing cluster -> none", true, "", true, false, false, ActionNone},
+		{"unlabeled existing NotReady -> rebuild", true, "", false, false, false, ActionRebuild},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -45,6 +46,9 @@ func TestClaimDecision(t *testing.T) {
 	}
 	if claimDecision(false, false) != ClaimLiveBuild {
 		t.Fatal("no standby should live build")
+	}
+	if claimDecision(false, true) != ClaimLiveBuild {
+		t.Fatal("no standby (ready=true) should live build")
 	}
 }
 

@@ -32,6 +32,17 @@ const (
 	ActionRebuild
 )
 
+func (a PoolAction) String() string {
+	switch a {
+	case ActionBuild:
+		return "ActionBuild"
+	case ActionRebuild:
+		return "ActionRebuild"
+	default:
+		return "ActionNone"
+	}
+}
+
 // reconcileDecision is the controller's pure decision: given the observed
 // cluster + in-flight flags, what should happen this tick. Honors the
 // single-cluster invariant — never builds while any cluster or op exists.
@@ -42,7 +53,18 @@ func reconcileDecision(clusterExists bool, state string, ready bool, opInFlight 
 	if !clusterExists {
 		return ActionBuild
 	}
-	if state == poolStateWarm && !ready {
+	if state == poolStateClaimed {
+		return ActionNone
+	}
+	if state == poolStateWarm {
+		if !ready {
+			return ActionRebuild
+		}
+		return ActionNone
+	}
+	// Unlabeled existing cluster: a Ready one is left alone (operator-managed);
+	// a NotReady one is a half-built orphan (e.g. crashed mid-build) → rebuild.
+	if !ready {
 		return ActionRebuild
 	}
 	return ActionNone
@@ -55,6 +77,13 @@ const (
 	ClaimLiveBuild ClaimAction = iota
 	ClaimStandby
 )
+
+func (a ClaimAction) String() string {
+	if a == ClaimStandby {
+		return "ClaimStandby"
+	}
+	return "ClaimLiveBuild"
+}
 
 // claimDecision: claim the standby only if a WARM cluster exists AND is ready.
 func claimDecision(warmExists bool, ready bool) ClaimAction {
@@ -220,9 +249,13 @@ func poolReconcileTick(ctx context.Context) {
 	opInFlight := getCurrentOp() != ""
 	switch reconcileDecision(exists, state, ready, opInFlight, pool.isBuilding()) {
 	case ActionBuild:
-		go buildStandby(false, false)
+		if pool.claimAndSetBuilding() {
+			go buildStandby(false, false)
+		}
 	case ActionRebuild:
-		go buildStandby(false, true)
+		if pool.claimAndSetBuilding() {
+			go buildStandby(false, true)
+		}
 	case ActionNone:
 		// nothing
 	}
@@ -257,15 +290,13 @@ func runClaim() {
 // (or claimPending becomes set during the build) it labels CLAIMED, else WARM.
 // predelete=true tears down any existing (degraded) cluster before applying.
 func buildStandby(claimAfter bool, predelete bool) {
-	if !pool.claimAndSetBuilding() {
-		return
-	}
 	setCurrentOp("pool-build")
 	defer func() {
 		setCurrentOp("")
 		pool.setBuilding(false)
 		if r := recover(); r != nil {
 			pool.setBuildState("none", fmt.Sprintf("panic: %v", r))
+			deploy.finish("failed")
 		}
 	}()
 
@@ -284,11 +315,13 @@ func buildStandby(claimAfter bool, predelete bool) {
 	manifestPath := filepath.Join(claudeDir(), manifest)
 	if err := runShell("kubectl apply -f " + manifestPath); err != nil {
 		pool.setBuildState("none", "apply failed: "+err.Error())
+		claimPending.Store(false)
 		deploy.finish("failed")
 		return
 	}
 	if err := waitForTargetReady(2); err != nil {
 		pool.setBuildState("none", err.Error())
+		claimPending.Store(false)
 		deploy.finish("failed")
 		return
 	}
