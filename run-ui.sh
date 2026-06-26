@@ -22,9 +22,10 @@ fi
 
 SECURITY_AGENT_URL="${SECURITY_AGENT_URL:-http://localhost:8082}"
 
-# Warm pool config for target-cluster pre-deployment
+# Warm pool config for target-cluster pre-deployment.
+# Standby sizing is controlled by POOL_STANDBY_MANIFEST (point it at a
+# lite/parallel variant for smaller standbys) — there is no separate profile knob.
 export POOL_ENABLED="${POOL_ENABLED:-true}"
-export POOL_STANDBY_PROFILE="${POOL_STANDBY_PROFILE:-full}"
 export POOL_STANDBY_MANIFEST="${POOL_STANDBY_MANIFEST:-03-target-cluster/target-cluster-parallel.yaml}"
 export POOL_POLL_SECONDS="${POOL_POLL_SECONDS:-5}"
 
