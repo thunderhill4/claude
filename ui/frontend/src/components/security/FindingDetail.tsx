@@ -1,4 +1,3 @@
-import React from 'react';
 import { ArrowLeft, Shield, FileText, Wrench, Brain } from 'lucide-react';
 import type { SecurityFinding } from '@/lib/types';
 import { SeverityBadge } from './SeverityBadge';

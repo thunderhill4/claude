@@ -1,0 +1,208 @@
+---
+# Target cluster manifest template.
+#
+# Rendered by ui/backend/handlers/cluster_deploy.go via strings.ReplaceAll.
+# Placeholders:
+#   {{CLUSTER_NAME}}  — cluster name (default: target-cluster)
+#   {{IMAGE}}         — full containerDisk ref, e.g.
+#                       172.18.0.2:5000/ubuntu-noble-k3s:preinit
+#   {{API_LB_IP}}     — MetalLB-advertised API server IP (e.g. 172.18.255.215)
+#   {{CP_CPU}}        — control-plane vCPU count (e.g. 2 / 4)
+#   {{CP_MEM}}        — control-plane memory (e.g. 4Gi / 8Gi)
+#   {{WORKER_CPU}}    — worker vCPU count
+#   {{WORKER_MEM}}    — worker memory
+#
+# Pre-init image notes:
+#   - CP preK3sCommands removes /var/lib/rancher/k3s/server/token (the
+#     bake-time warm-up token) so CAPI's per-cluster config.yaml token wins.
+#   - postK3sCommands wrap the existing enable+start in a sentinel guard so a
+#     legacy :latest image with no firstboot-regen still works (sentinel
+#     absent → runs systemctl enable+start), while the :preinit path short-
+#     circuits on reruns once firstboot-regen has touched the sentinel.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: {{CLUSTER_NAME}}
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 10.42.0.0/16
+    services:
+      cidrBlocks:
+        - 10.43.0.0/16
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    kind: KThreesControlPlane
+    name: {{CLUSTER_NAME}}-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: {{CLUSTER_NAME}}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: {{CLUSTER_NAME}}
+  namespace: default
+spec:
+  controlPlaneServiceTemplate:
+    metadata:
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: "{{API_LB_IP}}"
+    spec:
+      type: LoadBalancer
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KThreesControlPlane
+metadata:
+  name: {{CLUSTER_NAME}}-control-plane
+  namespace: default
+spec:
+  replicas: 1
+  version: v1.31.4+k3s1
+  kthreesConfigSpec:
+    agentConfig:
+      airGapped: true
+    serverConfig:
+      cloudProviderName: ""
+      disableComponents:
+        - servicelb
+        - traefik
+      tlsSan:
+        - {{API_LB_IP}}
+    preK3sCommands:
+      - mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
+      - rm -f /var/lib/rancher/k3s/server/token
+      # Purge stale bake-time TLS state so only CAPI-written CAs remain.
+      # Catches leaf certs, dynamic-cert.json, and any other non-CA artifact
+      # — leaving these around makes `k3s --cluster-reset` loop on
+      # "CA cert validation failed". k3s regenerates everything from the
+      # CAs on next start.
+      - find /var/lib/rancher/k3s/server/tls -type f ! -name '*-ca.crt' ! -name '*-ca.key' ! -name '*-ca.nochain.crt' -delete
+    postK3sCommands:
+      - test -f /var/lib/rancher/k3s/.firstboot-done && exit 0 || (systemctl daemon-reload && systemctl enable k3s && systemctl start k3s)
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: KubevirtMachineTemplate
+      name: {{CLUSTER_NAME}}-cp
+      namespace: default
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: {{CLUSTER_NAME}}-cp
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: {{CP_CPU}}
+                memory:
+                  guest: {{CP_MEM}}
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - bridge: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - containerDisk:
+                    image: {{IMAGE}}
+                  name: systemdisk
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: {{CLUSTER_NAME}}-workers
+  namespace: default
+spec:
+  clusterName: {{CLUSTER_NAME}}
+  replicas: 1
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: {{CLUSTER_NAME}}
+      version: v1.31.4+k3s1
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+          kind: KThreesConfigTemplate
+          name: {{CLUSTER_NAME}}-workers
+          namespace: default
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: {{CLUSTER_NAME}}-workers
+        namespace: default
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KThreesConfigTemplate
+metadata:
+  name: {{CLUSTER_NAME}}-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      agentConfig:
+        airGapped: true
+      preK3sCommands:
+        - mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
+      postK3sCommands:
+        - test -f /var/lib/rancher/k3s/.firstboot-done && exit 0 || (systemctl daemon-reload && systemctl enable k3s-agent && systemctl start k3s-agent)
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: {{CLUSTER_NAME}}-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: {{WORKER_CPU}}
+                memory:
+                  guest: {{WORKER_MEM}}
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - bridge: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - containerDisk:
+                    image: {{IMAGE}}
+                  name: systemdisk

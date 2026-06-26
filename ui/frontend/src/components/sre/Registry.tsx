@@ -30,6 +30,8 @@ export function Registry() {
   }, []);
 
   useEffect(() => {
+    // refresh() sets state asynchronously after an await, not a synchronous cascade.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
     const id = setInterval(refresh, 30_000);
     return () => clearInterval(id);

@@ -7,10 +7,10 @@
 #
 set -euo pipefail
 
-DV_SOURCE="ubuntu-noble-k3s"
-IMAGE_NAME="localhost:5000/ubuntu-noble-k3s:latest"
-HELPER_POD="disk-extractor"
-WORK_DIR="/tmp/containerdisk-build"
+DV_SOURCE="${DV_SOURCE:-ubuntu-noble-k3s}"
+IMAGE_NAME="${IMAGE_NAME:-localhost:5000/ubuntu-noble-k3s:latest}"
+HELPER_POD="${HELPER_POD:-disk-extractor}"
+WORK_DIR="${WORK_DIR:-/tmp/containerdisk-build}"
 
 # ── Colors ──────────────────────────────────────────────────
 CYAN='\033[0;36m'

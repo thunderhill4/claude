@@ -1,4 +1,4 @@
-import { Radar, Lightbulb, AlertTriangle, Wrench, CheckCircle2, Clock, ArrowRight } from 'lucide-react';
+import { Radar, Lightbulb, AlertTriangle, CheckCircle2, ArrowRight } from 'lucide-react';
 
 interface Recommendation {
   id: string;

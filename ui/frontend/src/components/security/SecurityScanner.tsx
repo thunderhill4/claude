@@ -4,7 +4,6 @@ import type { RulesResponse } from '@/lib/types';
 import { getSecurityRules } from '@/lib/api';
 import { ScanUpload } from './ScanUpload';
 import { RegistryScan } from './RegistryScan';
-import { SeverityBadge } from './SeverityBadge';
 
 type Tab = 'file' | 'registry' | 'rules';
 

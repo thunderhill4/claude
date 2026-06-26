@@ -1,0 +1,232 @@
+---
+# Parallel-boot variant of target-cluster.yaml.
+#
+# Goal: boot the worker VM in parallel with the control plane instead of waiting
+# for the CP to initialize (~50s faster end-to-end).
+#
+# How it works:
+#   * The k3s join token is PRE-SEEDED into the `target-cluster-token` secret, so
+#     it is known before the CP exists (KThrees adopts an existing token secret
+#     instead of generating one).
+#   * The worker is given a STATIC bootstrap secret via `bootstrap.dataSecretName`
+#     instead of a KThreesConfigTemplate. This bypasses the KThrees bootstrap
+#     provider, which otherwise withholds worker bootstrap data until the control
+#     plane reports initialized — that gate is the reason the worker normally
+#     starts ~60s late.
+#   * The worker join already targets the static control-plane VIP
+#     (https://172.18.255.215:6443). The k3s agent simply retries until the API
+#     answers, so the worker VM can boot immediately and join the moment the CP
+#     is up.
+#
+# Trade-off: the token is static/committed and the worker bootstrap is hand-rolled
+# (must be kept in sync with what KThrees would generate). See target-cluster.yaml
+# for the stock, fully CAPI-managed path.
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: target-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 10.42.0.0/16
+    services:
+      cidrBlocks:
+        - 10.43.0.0/16
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    kind: KThreesControlPlane
+    name: target-cluster-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: target-cluster
+---
+# Pre-seeded k3s token. KThrees uses this instead of generating its own, so the
+# worker (below) can embed the same token before the CP is initialized.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: target-cluster-token
+  namespace: default
+type: cluster.x-k8s.io/secret
+stringData:
+  value: "f00dcafef00dcafef00dcafef00dcafe"
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: target-cluster
+  namespace: default
+spec:
+  controlPlaneServiceTemplate:
+    metadata:
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: "172.18.255.215"
+    spec:
+      type: LoadBalancer
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KThreesControlPlane
+metadata:
+  name: target-cluster-control-plane
+  namespace: default
+spec:
+  replicas: 1
+  version: v1.31.4+k3s1
+  kthreesConfigSpec:
+    agentConfig:
+      airGapped: true
+    serverConfig:
+      cloudProviderName: ""
+      disableComponents:
+        - servicelb
+        - traefik
+      tlsSan:
+        - 172.18.255.215
+    preK3sCommands:
+      - mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
+    postK3sCommands:
+      - systemctl daemon-reload && systemctl enable k3s && systemctl start k3s
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: KubevirtMachineTemplate
+      name: target-cluster-cp
+      namespace: default
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: target-cluster-cp
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: 4
+                memory:
+                  guest: 8Gi
+                ioThreadsPolicy: shared
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - bridge: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - containerDisk:
+                    image: 172.18.0.2:5000/ubuntu-noble-k3s:latest
+                  name: systemdisk
+---
+# Static worker bootstrap. Mirrors what KThrees would generate for a join, but is
+# available immediately (no wait for control-plane-initialized). The k3s agent
+# retries the server VIP until the CP is reachable.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: target-cluster-workers-bootstrap
+  namespace: default
+type: cluster.x-k8s.io/secret
+stringData:
+  value: |
+    #cloud-config
+
+    write_files:
+    -   path: /etc/rancher/k3s/config.yaml
+        owner: root:root
+        permissions: '0640'
+        content: |
+          kubelet-arg:
+          - cloud-provider=external
+          server: https://172.18.255.215:6443
+          token: f00dcafef00dcafef00dcafef00dcafe
+
+    runcmd:
+      - "mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys"
+      - INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC='agent' sh /opt/install.sh && mkdir -p /run/cluster-api && echo success > /run/cluster-api/bootstrap-success.complete
+      - "systemctl daemon-reload && systemctl enable k3s-agent && systemctl start k3s-agent"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: target-cluster-workers
+  namespace: default
+  annotations:
+    # Skip CAPI's "ControlPlaneIsStable" preflight check so the worker MachineSet
+    # scales up immediately instead of waiting for the CP to finish provisioning.
+    # Combined with the static bootstrap secret above, this lets the worker VM
+    # boot in parallel with the control plane.
+    machineset.cluster.x-k8s.io/skip-preflight-checks: All
+spec:
+  clusterName: target-cluster
+  replicas: 1
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: target-cluster
+      version: v1.31.4+k3s1
+      bootstrap:
+        dataSecretName: target-cluster-workers-bootstrap
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: target-cluster-workers
+        namespace: default
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: target-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: 4
+                memory:
+                  guest: 6Gi
+                ioThreadsPolicy: shared
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - bridge: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - containerDisk:
+                    image: 172.18.0.2:5000/ubuntu-noble-k3s:latest
+                  name: systemdisk

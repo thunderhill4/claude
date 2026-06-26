@@ -1,0 +1,202 @@
+---
+# Phase 1 verification manifest for the pre-initialized golden image.
+#
+# Differences from target-cluster-lite.yaml:
+#   - containerDisk image points at :preinit
+#   - CP preK3sCommands: removes /var/lib/rancher/k3s/server/token (the
+#     bake-time warm-up token), so CAPI's config.yaml token wins and workers
+#     can join.
+#   - postK3sCommands wrapped in `test -f firstboot-done && exit 0 || (...)`
+#     so reruns (or CAPI bootstrap retries) no-op after firstboot-regen
+#     touches the sentinel.
+#
+# Phase 3 replaces this static file with target-cluster.tmpl.yaml (rendered
+# by the backend). This manifest stays in-tree for Phase 1 verification of
+# the pre-initialized image in isolation.
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: target-cluster
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 10.42.0.0/16
+    services:
+      cidrBlocks:
+        - 10.43.0.0/16
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    kind: KThreesControlPlane
+    name: target-cluster-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: target-cluster
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: target-cluster
+  namespace: default
+spec:
+  controlPlaneServiceTemplate:
+    metadata:
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: "172.18.255.215"
+    spec:
+      type: LoadBalancer
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KThreesControlPlane
+metadata:
+  name: target-cluster-control-plane
+  namespace: default
+spec:
+  replicas: 1
+  version: v1.31.4+k3s1
+  kthreesConfigSpec:
+    agentConfig:
+      airGapped: true
+    serverConfig:
+      cloudProviderName: ""
+      disableComponents:
+        - servicelb
+        - traefik
+      tlsSan:
+        - 172.18.255.215
+    preK3sCommands:
+      # Drop bake-time warm-up token so CAPI's per-cluster token (written to
+      # /etc/rancher/k3s/config.yaml via write_files) wins.
+      - rm -f /var/lib/rancher/k3s/server/token
+      # Purge stale bake-time TLS state so only CAPI-written CAs remain. Leaf
+      # certs, dynamic-cert.json (the k3s dynamic cert cache — also bake-time
+      # and would make the supervisor present a stale cert), and any other
+      # non-CA artifact must go. k3s regenerates everything from the CAs on
+      # next start. Without this, `k3s --cluster-reset` loops on
+      # "CA cert validation failed".
+      - find /var/lib/rancher/k3s/server/tls -type f ! -name '*-ca.crt' ! -name '*-ca.key' ! -name '*-ca.nochain.crt' -delete
+    postK3sCommands:
+      - test -f /var/lib/rancher/k3s/.firstboot-done && exit 0 || (systemctl daemon-reload && systemctl enable k3s && systemctl start k3s)
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: KubevirtMachineTemplate
+      name: target-cluster-cp
+      namespace: default
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: target-cluster-cp
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: 2
+                memory:
+                  guest: 4Gi
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - bridge: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - containerDisk:
+                    image: 172.18.0.2:5000/ubuntu-noble-k3s:preinit
+                  name: systemdisk
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: target-cluster-workers
+  namespace: default
+spec:
+  clusterName: target-cluster
+  replicas: 1
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: target-cluster
+      version: v1.31.4+k3s1
+      bootstrap:
+        configRef:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+          kind: KThreesConfigTemplate
+          name: target-cluster-workers
+          namespace: default
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: target-cluster-workers
+        namespace: default
+---
+apiVersion: bootstrap.cluster.x-k8s.io/v1beta2
+kind: KThreesConfigTemplate
+metadata:
+  name: target-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      agentConfig:
+        airGapped: true
+      postK3sCommands:
+        - test -f /var/lib/rancher/k3s/.firstboot-done && exit 0 || (systemctl daemon-reload && systemctl enable k3s-agent && systemctl start k3s-agent)
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: target-cluster-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: 2
+                memory:
+                  guest: 4Gi
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - bridge: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - containerDisk:
+                    image: 172.18.0.2:5000/ubuntu-noble-k3s:preinit
+                  name: systemdisk

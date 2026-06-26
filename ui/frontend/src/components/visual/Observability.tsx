@@ -1,4 +1,4 @@
-import { Activity, TrendingUp, ArrowRight } from 'lucide-react';
+import { Activity } from 'lucide-react';
 
 interface ServiceMetric {
   name: string;

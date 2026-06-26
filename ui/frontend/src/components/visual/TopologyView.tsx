@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Maximize2, Minimize2, ZoomIn, ZoomOut, RefreshCw } from 'lucide-react';
+import { Minimize2, ZoomIn, ZoomOut, RefreshCw } from 'lucide-react';
 
 interface TopoNode {
   id: string;
