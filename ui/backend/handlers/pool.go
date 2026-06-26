@@ -239,6 +239,7 @@ func runClaim() {
 	if err := labelTargetCluster(poolStateClaimed); err != nil {
 		deploy.addLog("warn", "could not set claimed label: "+err.Error())
 	}
+	claimPending.Store(false)
 	// Refresh the local kubeconfig copy for downstream scripts (istio, verify).
 	kubeconfigPath := "/tmp/" + targetClusterName + "-kubeconfig"
 	kubeconfigLocal := filepath.Join(claudeDir(), targetClusterName+"-kubeconfig")

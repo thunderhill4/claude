@@ -384,6 +384,7 @@ func waitForTargetReady(expectedVMs int) error {
 // ── Deployment flow ──────────────────────────────────────────────
 
 func runDeployment(profile, image string) {
+	defer setCurrentOp("")
 	dir := claudeDir()
 
 	profSpec, profOK := profileSpecs[profile]
