@@ -228,6 +228,31 @@ func poolReconcileTick(ctx context.Context) {
 	}
 }
 
+// runClaim hands over an existing WARM standby as the user's cluster: relabel
+// CLAIMED and emit synthetic progress. Resolves in seconds (cluster already up).
+func runClaim() {
+	defer setCurrentOp("")
+	deploy.resetForNewRun()
+	deploy.addLog("step", "━━ Claiming pre-built standby cluster ━━")
+	deploy.addLog("info", "A warm standby was ready — handing it over instead of building.")
+
+	if err := labelTargetCluster(poolStateClaimed); err != nil {
+		deploy.addLog("warn", "could not set claimed label: "+err.Error())
+	}
+	// Refresh the local kubeconfig copy for downstream scripts (istio, verify).
+	kubeconfigPath := "/tmp/" + targetClusterName + "-kubeconfig"
+	kubeconfigLocal := filepath.Join(claudeDir(), targetClusterName+"-kubeconfig")
+	_ = runShell(fmt.Sprintf("clusterctl get kubeconfig %s > %s 2>/dev/null && cp %s %s 2>/dev/null || true",
+		targetClusterName, kubeconfigPath, kubeconfigPath, kubeconfigLocal))
+
+	pool.setBuildState("claimed", "")
+	pool.setReady(true)
+	deploy.addLog("success", "✓ Kubeconfig ready → "+kubeconfigPath)
+	deploy.addLog("success", "✓ Standby claimed — cluster is up and Ready")
+	deploy.addLog("step", "━━ Done! ━━")
+	deploy.finish("done")
+}
+
 // buildStandby builds the standby cluster off the user's clock. If claimAfter
 // (or claimPending becomes set during the build) it labels CLAIMED, else WARM.
 // predelete=true tears down any existing (degraded) cluster before applying.

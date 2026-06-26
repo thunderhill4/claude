@@ -540,6 +540,10 @@ func HandleDeployCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if deploy.getState() == "running" && getCurrentOp() == "pool-build" {
+		claimPending.Store(true)
+	}
+
 	state := deploy.getState()
 	if state != "running" {
 		profile := r.URL.Query().Get("profile")
@@ -550,9 +554,18 @@ func HandleDeployCluster(w http.ResponseWriter, r *http.Request) {
 		if _, ok := imageVariants[image]; !ok {
 			image = warmImageKey
 		}
-		deploy.resetForNewRun()
-		setCurrentOp("deploy")
-		go runDeployment(profile, image)
+
+		// Fast path: claim a hot standby if one exists and is Ready.
+		exists, plState, ready := observeCluster(r.Context())
+		warm := exists && plState == poolStateWarm
+		if claimDecision(warm, ready) == ClaimStandby {
+			setCurrentOp("deploy")
+			go runClaim()
+		} else {
+			deploy.resetForNewRun()
+			setCurrentOp("deploy")
+			go runDeployment(profile, image)
+		}
 	}
 
 	streamDeployLogs(w, r)
