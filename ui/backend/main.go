@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -47,6 +48,9 @@ func main() {
 	} else {
 		log.Println("Kubernetes client initialized successfully")
 	}
+
+	// Pool controller: keep one warm standby cluster pre-built.
+	go handlers.RunPoolController(context.Background())
 
 	mux := http.NewServeMux()
 

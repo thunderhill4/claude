@@ -2,11 +2,14 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -165,4 +168,111 @@ func HandlePoolStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, pool.snapshot())
+}
+
+// claimPending is set when a user claims while a standby build is in flight, so
+// the build labels the cluster CLAIMED (not WARM) when it completes.
+var claimPending atomic.Bool
+
+// RunPoolController is the reconcile loop. Start once from main() in a goroutine.
+func RunPoolController(ctx context.Context) {
+	if !poolEnabled() {
+		pool.setBuildState("none", "")
+		return
+	}
+	ticker := time.NewTicker(poolPollInterval())
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			poolReconcileTick(ctx)
+		}
+	}
+}
+
+func poolReconcileTick(ctx context.Context) {
+	exists, state, ready := observeCluster(ctx)
+	// Refresh the UI cache from observed truth (unless mid-build).
+	if !pool.isBuilding() {
+		switch {
+		case !exists:
+			pool.setBuildState("none", "")
+		case state == poolStateClaimed:
+			pool.setBuildState("claimed", "")
+		case state == poolStateWarm:
+			pool.setBuildState("warm", "")
+		}
+		pool.setReady(ready)
+	}
+
+	opInFlight := getCurrentOp() != ""
+	switch reconcileDecision(exists, state, ready, opInFlight, pool.isBuilding()) {
+	case ActionBuild:
+		go buildStandby(false)
+	case ActionRebuild:
+		go func() {
+			_ = runShell("kubectl delete cluster " + targetClusterName + " --ignore-not-found --timeout=120s")
+			buildStandby(false)
+		}()
+	case ActionNone:
+		// nothing
+	}
+}
+
+// buildStandby builds the standby cluster off the user's clock. If claimAfter
+// (or claimPending becomes set during the build) it labels CLAIMED, else WARM.
+func buildStandby(claimAfter bool) {
+	if pool.isBuilding() {
+		return
+	}
+	pool.setBuilding(true)
+	setCurrentOp("pool-build")
+	defer func() {
+		setCurrentOp("")
+		pool.setBuilding(false)
+		if r := recover(); r != nil {
+			pool.setBuildState("none", fmt.Sprintf("panic: %v", r))
+		}
+	}()
+
+	deploy.resetForNewRun()
+	pool.setBuildState("building", "")
+	deploy.addLog("step", "━━ Building warm standby cluster (background) ━━")
+
+	manifest := os.Getenv("POOL_STANDBY_MANIFEST")
+	if manifest == "" {
+		manifest = "03-target-cluster/target-cluster-parallel.yaml"
+	}
+	manifestPath := filepath.Join(claudeDir(), manifest)
+	if err := runShell("kubectl apply -f " + manifestPath); err != nil {
+		pool.setBuildState("none", "apply failed: "+err.Error())
+		deploy.finish("failed")
+		return
+	}
+	if err := waitForTargetReady(2); err != nil {
+		pool.setBuildState("none", err.Error())
+		deploy.finish("failed")
+		return
+	}
+
+	label := poolStateWarm
+	uiState := "warm"
+	if claimAfter || claimPending.Load() {
+		label = poolStateClaimed
+		uiState = "claimed"
+		claimPending.Store(false)
+	}
+	if err := labelTargetCluster(label); err != nil {
+		deploy.addLog("warn", "could not set pool label: "+err.Error())
+	}
+	pool.setReady(true)
+	pool.setBuildState(uiState, "")
+	if uiState == "warm" {
+		deploy.addLog("success", "✓ Warm standby ready — Deploy will claim it instantly")
+	} else {
+		deploy.addLog("success", "✓ Cluster ready")
+	}
+	deploy.finish("done")
 }

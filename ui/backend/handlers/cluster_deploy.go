@@ -295,6 +295,84 @@ func runScriptWithStream(script string) error {
 	return cmd.Wait()
 }
 
+// waitForTargetReady waits for VMs to boot, fetches the kubeconfig, and waits
+// for the API server + nodes to be Ready. Streams progress to the deploy log.
+// Returns an error (so callers decide how to fail) instead of finishing.
+func waitForTargetReady(expectedVMs int) error {
+	dir := claudeDir()
+
+	deploy.addLog("step", "━━ Wait for VMs to Boot ━━")
+	vmTimeout := time.Now().Add(20 * time.Minute)
+	for {
+		if time.Now().After(vmTimeout) {
+			return fmt.Errorf("timed out waiting for VMs after 20 minutes")
+		}
+		vmiLines := kubectlGet("get", "vmi",
+			"-l", "cluster.x-k8s.io/cluster-name="+targetClusterName,
+			"-o", "jsonpath={range .items[*]}{.metadata.name}={.status.phase}{\"\\n\"}{end}")
+		running, total := 0, 0
+		for _, line := range strings.Split(vmiLines, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			total++
+			if strings.HasSuffix(line, "=Running") {
+				running++
+			}
+		}
+		deploy.addLog("info", fmt.Sprintf("  VMIs: %d/%d Running", running, total))
+		if running >= expectedVMs {
+			break
+		}
+		time.Sleep(15 * time.Second)
+	}
+	deploy.addLog("success", "✓ VMs are running")
+
+	deploy.addLog("step", "━━ Wait for Target API Server ━━")
+	kubeconfigPath := "/tmp/" + targetClusterName + "-kubeconfig"
+	kubeconfigLocal := filepath.Join(dir, targetClusterName+"-kubeconfig")
+	kcTimeout := time.Now().Add(3 * time.Minute)
+	gotKC := false
+	for time.Now().Before(kcTimeout) {
+		if err := runShell(fmt.Sprintf("clusterctl get kubeconfig %s > %s 2>/dev/null", targetClusterName, kubeconfigPath)); err == nil {
+			runShell(fmt.Sprintf("cp %s %s 2>/dev/null || true", kubeconfigPath, kubeconfigLocal))
+			deploy.addLog("success", "✓ Kubeconfig retrieved → "+kubeconfigPath)
+			gotKC = true
+			break
+		}
+		time.Sleep(10 * time.Second)
+	}
+	if !gotKC {
+		return fmt.Errorf("could not retrieve kubeconfig after 3 minutes")
+	}
+
+	apiTimeout := time.Now().Add(5 * time.Minute)
+	for {
+		if shellCheck(fmt.Sprintf("kubectl --kubeconfig=%s get nodes --request-timeout=5s 2>/dev/null", kubeconfigPath)) {
+			deploy.addLog("success", "✓ API server is responding")
+			break
+		}
+		if time.Now().After(apiTimeout) {
+			return fmt.Errorf("API server not reachable after 5 minutes")
+		}
+		time.Sleep(10 * time.Second)
+	}
+
+	nodesTimeout := time.Now().Add(3 * time.Minute)
+	for {
+		if targetNodesReady(2) {
+			deploy.addLog("success", "✓ All nodes are Ready")
+			break
+		}
+		if time.Now().After(nodesTimeout) {
+			deploy.addLog("warn", "Nodes not all Ready yet — continuing")
+			break
+		}
+		time.Sleep(15 * time.Second)
+	}
+	return nil
+}
+
 // ── Deployment flow ──────────────────────────────────────────────
 
 func runDeployment(profile, image string) {
@@ -431,121 +509,13 @@ func runDeployment(profile, image string) {
 	}
 	deploy.addLog("success", "✓ Cluster resources applied — CAPI controllers are provisioning VMs")
 
-	// ── Step 5: Wait for VMs ──────────────────────────────────────
-	deploy.addLog("step", "━━ Step 5/6: Wait for VMs to Boot ━━")
-	deploy.addLog("info", "CDI clones disks → KubeVirt creates VMs → Ubuntu boots → cloud-init runs k3s setup")
-	deploy.addLog("info", "Typically takes 5–10 minutes (CDI cloning + VM boot + k3s init)...")
-
-	// CAPK labels VMs with cluster.x-k8s.io/cluster-name but NOT role.
-	// The role label lives on CAPI Machine objects, not on VMIs.
-	// So we count all Running VMIs for this cluster and wait for >= 2.
 	const expectedVMs = 2
-	vmTimeout := time.Now().Add(20 * time.Minute)
-	for {
-		if time.Now().After(vmTimeout) {
-			fail("Timed out waiting for VMs after 20 minutes. Check: kubectl get vmi,dv,machines")
-			return
-		}
-
-		// Count DVs still being cloned (gives visibility while disks are provisioning)
-		dvOut := kubectlGet("get", "dv",
-			"-l", "cluster.x-k8s.io/cluster-name="+targetClusterName,
-			"--no-headers", "--ignore-not-found")
-		dvCount := countNonEmpty(dvOut)
-
-		// Count VMIs and how many are Running
-		vmiLines := kubectlGet("get", "vmi",
-			"-l", "cluster.x-k8s.io/cluster-name="+targetClusterName,
-			"-o", "jsonpath={range .items[*]}{.metadata.name}={.status.phase}{\"\\n\"}{end}")
-		running := 0
-		total := 0
-		for _, line := range strings.Split(vmiLines, "\n") {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			total++
-			if strings.HasSuffix(line, "=Running") {
-				running++
-			}
-		}
-
-		if dvCount > 0 || total == 0 {
-			deploy.addLog("info", fmt.Sprintf("  DataVolumes cloning: %d | VMIs: %d/%d Running", dvCount, running, total))
-		} else {
-			deploy.addLog("info", fmt.Sprintf("  VMIs: %d/%d Running", running, total))
-		}
-
-		if running >= expectedVMs {
-			break
-		}
-		time.Sleep(15 * time.Second)
-	}
-	deploy.addLog("success", "✓ Both VMs are running!")
-
-	// ── Step 6: Wait for API server ───────────────────────────────
-	deploy.addLog("step", "━━ Step 6/6: Wait for Target Cluster API Server ━━")
-	deploy.addLog("info", "k3s is starting inside the VMs. Waiting for API server at "+targetLBIP+":6443...")
-
-	kubeconfigPath := "/tmp/" + targetClusterName + "-kubeconfig"
-	kubeconfigLocal := filepath.Join(dir, targetClusterName+"-kubeconfig")
-
-	// Get kubeconfig
-	kcTimeout := time.Now().Add(3 * time.Minute)
-	gotKC := false
-	for time.Now().Before(kcTimeout) {
-		if err := runShell(fmt.Sprintf("clusterctl get kubeconfig %s > %s 2>/dev/null", targetClusterName, kubeconfigPath)); err == nil {
-			runShell(fmt.Sprintf("cp %s %s 2>/dev/null || true", kubeconfigPath, kubeconfigLocal))
-			deploy.addLog("success", "✓ Kubeconfig retrieved → "+kubeconfigPath)
-			gotKC = true
-			break
-		}
-		time.Sleep(10 * time.Second)
-	}
-	if !gotKC {
-		fail("Could not retrieve kubeconfig after 3 minutes.")
+	if err := waitForTargetReady(expectedVMs); err != nil {
+		fail(err.Error())
 		return
 	}
-
-	// Wait for API server
-	apiTimeout := time.Now().Add(5 * time.Minute)
-	for time.Now().Before(apiTimeout) {
-		if shellCheck(fmt.Sprintf("kubectl --kubeconfig=%s get nodes --request-timeout=5s 2>/dev/null", kubeconfigPath)) {
-			deploy.addLog("success", "✓ API server is responding!")
-			break
-		}
-		if time.Now().After(apiTimeout) {
-			fail("API server not reachable after 5 minutes. Check VM networking.")
-			return
-		}
-		time.Sleep(10 * time.Second)
-	}
-
-	// Wait for nodes Ready
-	nodesTimeout := time.Now().Add(3 * time.Minute)
-	for time.Now().Before(nodesTimeout) {
-		lines := kubectlGet("--kubeconfig="+kubeconfigPath, "get", "nodes", "--no-headers", "--ignore-not-found")
-		total := 0
-		ready := 0
-		for _, line := range strings.Split(lines, "\n") {
-			if strings.TrimSpace(line) != "" {
-				total++
-				if strings.Contains(line, " Ready") {
-					ready++
-				}
-			}
-		}
-		deploy.addLog("info", fmt.Sprintf("  Nodes: %d/%d Ready", ready, total))
-		if total >= 2 && ready >= 2 {
-			deploy.addLog("success", "✓ All nodes are Ready!")
-			break
-		}
-		if time.Now().After(nodesTimeout) {
-			deploy.addLog("warn", "Nodes not all Ready yet — cluster may still be initializing.")
-			break
-		}
-		time.Sleep(15 * time.Second)
-	}
-
+	kubeconfigPath := "/tmp/" + targetClusterName + "-kubeconfig"
+	_ = labelTargetCluster(poolStateClaimed)
 	deploy.addLog("step", "━━ Done! ━━")
 	deploy.addLog("success", "✓ Target cluster is up and running")
 	deploy.addLog("info", "KUBECONFIG="+kubeconfigPath)
