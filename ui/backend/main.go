@@ -58,6 +58,7 @@ func main() {
 	mux.HandleFunc("/api/v1/cluster/deploy/logs", handlers.HandleDeployLogs)
 	mux.HandleFunc("/api/v1/cluster/delete", handlers.HandleDeleteClusterStream)
 	mux.HandleFunc("/api/v1/cluster/target-status", handlers.HandleTargetClusterStatus)
+	mux.HandleFunc("/api/v1/cluster/pool-status", handlers.HandlePoolStatus)
 	mux.HandleFunc("/api/v1/cluster/target-delete", handlers.HandleDeleteCluster)
 	mux.HandleFunc("/api/v1/cluster/istio", handlers.HandleIstioInstall)
 

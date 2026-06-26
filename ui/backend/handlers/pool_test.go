@@ -43,3 +43,23 @@ func TestClaimDecision(t *testing.T) {
 		t.Fatal("no standby should live build")
 	}
 }
+
+func TestPoolSnapshotDefault(t *testing.T) {
+	p := &poolState{state: "none"}
+	s := p.snapshot()
+	if s.State != "none" || s.ClusterReady || s.LastError != "" {
+		t.Fatalf("unexpected default snapshot: %+v", s)
+	}
+}
+
+func TestPoolSetBuildState(t *testing.T) {
+	p := &poolState{state: "none"}
+	p.setBuildState("warm", "")
+	if s := p.snapshot(); s.State != "warm" || s.LastError != "" {
+		t.Fatalf("after warm: %+v", s)
+	}
+	p.setBuildState("building", "boom")
+	if s := p.snapshot(); s.State != "building" || s.LastError != "boom" {
+		t.Fatalf("after error: %+v", s)
+	}
+}
