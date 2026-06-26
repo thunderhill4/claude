@@ -559,12 +559,12 @@ func HandleDeployCluster(w http.ResponseWriter, r *http.Request) {
 		// Fast path: claim a hot standby if one exists and is Ready.
 		exists, plState, ready := observeCluster(r.Context())
 		warm := exists && plState == poolStateWarm
+
+		deploy.resetForNewRun()
+		setCurrentOp("deploy")
 		if claimDecision(warm, ready) == ClaimStandby {
-			setCurrentOp("deploy")
 			go runClaim()
 		} else {
-			deploy.resetForNewRun()
-			setCurrentOp("deploy")
 			go runDeployment(profile, image)
 		}
 	}

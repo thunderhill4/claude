@@ -232,7 +232,6 @@ func poolReconcileTick(ctx context.Context) {
 // CLAIMED and emit synthetic progress. Resolves in seconds (cluster already up).
 func runClaim() {
 	defer setCurrentOp("")
-	deploy.resetForNewRun()
 	deploy.addLog("step", "━━ Claiming pre-built standby cluster ━━")
 	deploy.addLog("info", "A warm standby was ready — handing it over instead of building.")
 
