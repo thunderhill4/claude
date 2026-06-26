@@ -44,6 +44,10 @@ spec:
               value: /policies
             - name: LISTEN_ADDR
               value: ":8082"
+            - name: OLLAMA_URL
+              value: "http://172.18.255.1:11434"
+            - name: OLLAMA_MODEL
+              value: "gemma2:9b"
           volumeMounts:
             - name: opa-policies
               mountPath: /policies

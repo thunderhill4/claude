@@ -1,0 +1,133 @@
+# host-ollama — make a host-machine Ollama reachable from inside the cluster.
+#
+# Ollama runs on your HOST (not in the cluster). Pods generally can't dial the
+# docker/host bridge gateway IP directly, and even when they can, hardcoding a
+# gateway IP into every workload is brittle. This gives pods a stable in-cluster
+# DNS name that forwards to the host's Ollama:
+#
+#   http://host-ollama.<namespace>.svc.cluster.local:11434/v1
+#
+# Reusable on ANY cluster — no project-specific setup required. Two knobs:
+#   * namespace        — where your workloads run (default: "default")
+#   * Endpoints address — the host IP reachable from pods (the bridge gateway).
+#     For kind/k3d this is usually 172.18.0.1. Find yours with:
+#       docker network inspect kind -f '{{(index .IPAM.Config 0).Gateway}}'
+#     For Docker Desktop, pods can often use the DNS name host.docker.internal
+#     instead — in that case skip Endpoints and give the Service an
+#     `externalName` (see the commented ExternalName variant at the bottom).
+#
+# Variants below (all optional, all commented):
+#   * NetworkPolicy   — only if the namespace has a restrictive egress policy.
+#   * MetalLB LB       — give Ollama a STABLE pool IP (e.g. 172.18.255.220)
+#                        reachable from all clusters + KubeVirt VMs on the bridge.
+#   * ExternalName     — Docker Desktop / host.docker.internal.
+#
+# A Service with manually-managed Endpoints MUST have no selector (as below).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: host-ollama
+  namespace: default            # <-- change to your namespace
+spec:
+  # no selector: Endpoints are managed by hand (below)
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: host-ollama             # must match the Service name
+  namespace: default            # <-- same namespace as the Service
+subsets:
+  - addresses:
+      - ip: 172.18.0.1          # <-- host/bridge gateway IP reachable from pods
+    ports:
+      - name: http
+        port: 11434
+        protocol: TCP
+---
+# OPTIONAL — only apply this if your namespace already has a default-deny or
+# otherwise restrictive *egress* NetworkPolicy (e.g. an OTel-only policy). In a
+# fresh namespace with no NetworkPolicies, pods already have unrestricted egress
+# and adding this would RESTRICT them. Leave it commented unless you need it.
+#
+# apiVersion: networking.k8s.io/v1
+# kind: NetworkPolicy
+# metadata:
+#   name: allow-host-ollama
+#   namespace: default          # <-- same namespace
+# spec:
+#   podSelector: {}             # all pods in the namespace; scope with matchLabels if preferred
+#   policyTypes:
+#     - Egress
+#   egress:
+#     # DNS (needed to resolve the Service name)
+#     - to:
+#         - namespaceSelector: {}
+#           podSelector:
+#             matchLabels:
+#               k8s-app: kube-dns
+#       ports:
+#         - port: 53
+#           protocol: UDP
+#         - port: 53
+#           protocol: TCP
+#     # Ollama
+#     - ports:
+#         - port: 11434
+#           protocol: TCP
+---
+# OPTIONAL — MetalLB LoadBalancer variant. Gives the host's Ollama a STABLE
+# external IP from the MetalLB pool (e.g. 172.18.255.220), reachable from
+# everything on the docker/kind bridge: pods in any cluster on that bridge AND
+# KubeVirt/target-cluster VMs. Useful when DNS-based access isn't available
+# (e.g. from a VM that isn't a member of this cluster's DNS).
+#
+# This is ADDITIONAL to the ClusterIP shim above — note the different name
+# (host-ollama-lb) and matching Endpoints. MetalLB assigns the loadBalancerIP
+# from its pool; kube-proxy DNATs it to the host endpoint below.
+#
+# Reach it at:  http://172.18.255.220:11434/v1
+#
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: host-ollama-lb
+#   namespace: default          # <-- your namespace
+# spec:
+#   type: LoadBalancer
+#   loadBalancerIP: 172.18.255.220   # <-- a free IP from your MetalLB pool
+#   ports:
+#     - name: http
+#       port: 11434
+#       targetPort: 11434
+#       protocol: TCP
+# ---
+# apiVersion: v1
+# kind: Endpoints
+# metadata:
+#   name: host-ollama-lb        # must match the LoadBalancer Service name
+#   namespace: default          # <-- same namespace
+# subsets:
+#   - addresses:
+#       - ip: 172.18.0.1        # <-- host/bridge gateway IP reachable from the cluster node
+#     ports:
+#       - name: http
+#         port: 11434
+#         protocol: TCP
+---
+# ExternalName variant (Docker Desktop / when pods resolve host.docker.internal).
+# Use INSTEAD OF the Service+Endpoints above, not in addition.
+#
+# apiVersion: v1
+# kind: Service
+# metadata:
+#   name: host-ollama
+#   namespace: default
+# spec:
+#   type: ExternalName
+#   externalName: host.docker.internal

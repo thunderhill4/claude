@@ -1,0 +1,6 @@
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY security-agent /app/security-agent
+COPY ../security/opa/policies /app/opa/policies
+WORKDIR /app
+EXPOSE 8082
+ENTRYPOINT ["/app/security-agent"]

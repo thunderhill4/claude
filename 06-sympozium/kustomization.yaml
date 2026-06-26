@@ -1,0 +1,21 @@
+# Phase 0 core bundle: policies + always-on warm schedule + cluster2-agent.
+#
+# Apply:    kubectl apply -k 06-sympozium/
+# Teardown: kubectl delete -k 06-sympozium/ --ignore-not-found
+#
+# target-cluster-agent, cost-analyzer, and incident-responder are NOT in this
+# bundle because they have preconditions (target kubeconfig secret; demo-only):
+#   - target-cluster-agent is applied by install-sympozium.sh once the target
+#     cluster's kubeconfig Secret exists.
+#   - cost-analyzer / incident-responder are applied on demand by
+#     demo-sympozium.sh (or `make sympozium-demo-agents`).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sympozium-system
+resources:
+  - policies/sandbox-restricted.yaml
+  - policies/target-reach.yaml
+  - schedules/ollama-warm.yaml
+  - host-ollama-service.yaml
+  - agent-egress-ollama.yaml
+  - cluster2-agent.yaml

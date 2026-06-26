@@ -6,19 +6,23 @@
 #
 # Env vars:
 #   PROFILE      lite | full                 (default: full)
-#   IMAGE_VARIANT noble | minimal            (default: noble)
+#   IMAGE_VARIANT warm | noble | minimal     (default: warm)
 #   CLUSTER_NAME                              (default: target-cluster)
 #   API_LB_IP                                 (default: 172.18.255.215)
 #
 # Usage:
+#   IMAGE_VARIANT=warm ./scripts/render-cluster.sh | kubectl apply -f -
 #   PROFILE=lite IMAGE_VARIANT=minimal ./scripts/render-cluster.sh | kubectl apply -f -
+#
+# NOTE: the `warm` variant renders target-cluster-warm.tmpl.yaml, which requires
+# scripts/seed-cluster-secrets.sh to have been run FIRST (so KThrees adopts the
+# pre-seeded CA/token that match the :warm image).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TMPL="${SCRIPT_DIR}/../03-target-cluster/target-cluster.tmpl.yaml"
 
 PROFILE="${PROFILE:-full}"
-IMAGE_VARIANT="${IMAGE_VARIANT:-noble}"
+IMAGE_VARIANT="${IMAGE_VARIANT:-warm}"
 CLUSTER_NAME="${CLUSTER_NAME:-target-cluster}"
 API_LB_IP="${API_LB_IP:-172.18.255.215}"
 
@@ -28,10 +32,16 @@ case "$PROFILE" in
   *) echo "unknown PROFILE: $PROFILE (expected lite|full)" >&2; exit 1 ;;
 esac
 
+TMPL="${SCRIPT_DIR}/../03-target-cluster/target-cluster.tmpl.yaml"
 case "$IMAGE_VARIANT" in
+  warm)
+    IMAGE="172.18.0.2:5000/ubuntu-noble-k3s:warm"
+    TMPL="${SCRIPT_DIR}/../03-target-cluster/target-cluster-warm.tmpl.yaml"
+    echo "note: warm variant — run scripts/seed-cluster-secrets.sh before applying." >&2
+    ;;
   noble)   IMAGE="172.18.0.2:5000/ubuntu-noble-k3s:preinit" ;;
   minimal) IMAGE="172.18.0.2:5000/ubuntu-minimal-k3s:preinit" ;;
-  *) echo "unknown IMAGE_VARIANT: $IMAGE_VARIANT (expected noble|minimal)" >&2; exit 1 ;;
+  *) echo "unknown IMAGE_VARIANT: $IMAGE_VARIANT (expected warm|noble|minimal)" >&2; exit 1 ;;
 esac
 
 sed \

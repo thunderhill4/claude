@@ -23,6 +23,40 @@ import (
 const targetClusterName = "target-cluster"
 const targetLBIP = "172.18.255.215"
 
+// imageVariant describes a golden image the user can pick.
+// Image is the full containerDisk ref used as the {{IMAGE}} placeholder.
+type imageVariant struct {
+	Image string
+	Label string
+}
+
+// The "warm" variant is the default fast-path: a golden image baked with fixed
+// CAs + token so first boot skips --cluster-reset/cert-purge, combined with a
+// parallel worker boot. Targets time-to-ready <40s. Selecting it switches the
+// deploy to the warm template + secret-seed step (see runDeployment).
+var imageVariants = map[string]imageVariant{
+	"warm":    {Image: "172.18.0.2:5000/ubuntu-noble-k3s:warm", Label: "Warm fast-path (~40s, parallel boot)"},
+	"noble":   {Image: "172.18.0.2:5000/ubuntu-noble-k3s:preinit", Label: "Ubuntu Noble (pre-init)"},
+	"minimal": {Image: "172.18.0.2:5000/ubuntu-minimal-k3s:preinit", Label: "Ubuntu Minimal (pre-init)"},
+}
+
+// warmImageKey is the imageVariants key that triggers the warm fast-path.
+const warmImageKey = "warm"
+
+// profileSpec holds the CP/worker resource sizing for a named profile.
+type profileSpec struct {
+	CPCPU     string
+	CPMem     string
+	WorkerCPU string
+	WorkerMem string
+	Label     string
+}
+
+var profileSpecs = map[string]profileSpec{
+	"lite": {CPCPU: "2", CPMem: "4Gi", WorkerCPU: "2", WorkerMem: "4Gi", Label: "Lite — CP: 2 CPU · 4Gi | Worker: 2 CPU · 4Gi"},
+	"full": {CPCPU: "4", CPMem: "8Gi", WorkerCPU: "4", WorkerMem: "6Gi", Label: "Full — CP: 4 CPU · 8Gi | Worker: 4 CPU · 6Gi"},
+}
+
 var (
 	capiClusterGVR = schema.GroupVersionResource{
 		Group: "cluster.x-k8s.io", Version: "v1beta1", Resource: "clusters",
@@ -186,6 +220,39 @@ func runShell(script string) error {
 	return cmd.Run()
 }
 
+// renderTemplate loads the template at path and substitutes the map values
+// for {{KEY}} placeholders. Uses strings.ReplaceAll so we don't depend on
+// text/template (no helper functions needed; placeholders are plain scalars).
+func renderTemplate(path string, subs map[string]string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	out := string(raw)
+	for k, v := range subs {
+		out = strings.ReplaceAll(out, "{{"+k+"}}", v)
+	}
+	if i := strings.Index(out, "{{"); i >= 0 {
+		end := i + 80
+		if end > len(out) {
+			end = len(out)
+		}
+		return "", fmt.Errorf("unresolved placeholder in rendered manifest near %q", out[i:end])
+	}
+	return out, nil
+}
+
+// applyStdin pipes the given YAML to `kubectl apply -f -` and streams
+// stdout/stderr through the deploy log.
+func applyStdin(yaml string) error {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Env = os.Environ()
+	cmd.Stdin = strings.NewReader(yaml)
+	cmd.Stdout = lineWriter{"info"}
+	cmd.Stderr = lineWriter{"warn"}
+	return cmd.Run()
+}
+
 func shellCheck(script string) bool {
 	cmd := exec.Command("bash", "-c", script)
 	cmd.Env = os.Environ()
@@ -230,8 +297,11 @@ func runScriptWithStream(script string) error {
 
 // ── Deployment flow ──────────────────────────────────────────────
 
-func runDeployment(profile string) {
+func runDeployment(profile, image string) {
 	dir := claudeDir()
+
+	profSpec, profOK := profileSpecs[profile]
+	imgSpec, imgOK := imageVariants[image]
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -245,9 +315,18 @@ func runDeployment(profile string) {
 		deploy.finish("failed")
 	}
 
+	if !profOK {
+		fail(fmt.Sprintf("Unknown profile %q. Valid: lite, full.", profile))
+		return
+	}
+	if !imgOK {
+		fail(fmt.Sprintf("Unknown image %q. Valid: noble, minimal.", image))
+		return
+	}
+
 	// ── Step 1: Prerequisites ──────────────────────────────────────
 	deploy.addLog("step", "━━ Step 1/6: Check Prerequisites ━━")
-	deploy.addLog("info", "Verifying KubeVirt, CDI, golden image, and CLI tools.")
+	deploy.addLog("info", "Verifying KubeVirt, CDI, and CLI tools.")
 
 	checks := []struct {
 		label string
@@ -255,7 +334,6 @@ func runDeployment(profile string) {
 	}{
 		{"KubeVirt installed", `kubectl get kubevirt -A -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q Deployed`},
 		{"CDI installed", `kubectl get cdi -A -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q Deployed`},
-		{"Golden image (ubuntu-noble-dv)", `kubectl get dv ubuntu-noble-dv -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Succeeded`},
 		{"kubectl", `kubectl version --client=true 2>/dev/null`},
 		{"clusterctl", `clusterctl version 2>/dev/null`},
 	}
@@ -270,7 +348,7 @@ func runDeployment(profile string) {
 		}
 	}
 	if !allOK {
-		fail("Prerequisites not met. Ensure KubeVirt, CDI, and ubuntu-noble-dv are ready.")
+		fail("Prerequisites not met. Ensure KubeVirt and CDI are ready.")
 		return
 	}
 
@@ -311,19 +389,43 @@ func runDeployment(profile string) {
 	}
 
 	// ── Step 4: Apply cluster manifests ───────────────────────────
+	warm := image == warmImageKey
 	deploy.addLog("step", "━━ Step 4/6: Deploy Target Cluster ━━")
 	deploy.addLog("info", "Applying CAPI resources (Cluster, KubevirtCluster, KThreesControlPlane, MachineDeployment).")
-
-	var clusterYAML string
-	if profile == "lite" {
-		deploy.addLog("info", "Profile: Lite — CP: 2 CPU · 4Gi RAM  |  Worker: 2 CPU · 4Gi RAM")
-		clusterYAML = filepath.Join(dir, "03-target-cluster/target-cluster-lite.yaml")
-	} else {
-		deploy.addLog("info", "Profile: Full — CP: 4 CPU · 8Gi RAM  |  Worker: 4 CPU · 6Gi RAM  |  ioThreadsPolicy: shared")
-		clusterYAML = filepath.Join(dir, "03-target-cluster/target-cluster.yaml")
-	}
+	deploy.addLog("info", "Profile: "+profSpec.Label)
+	deploy.addLog("info", "Image:   "+imgSpec.Label+" ("+imgSpec.Image+")")
 	deploy.addLog("info", "API server will be exposed at "+targetLBIP+":6443 via MetalLB")
-	if err := runShell("kubectl apply -f " + clusterYAML); err != nil {
+
+	// Warm fast-path: pre-seed the CA/token secrets so KThrees adopts the same
+	// material baked into the :warm image (no CA conflict → no --cluster-reset),
+	// then apply the warm template (parallel worker boot). Targets <40s.
+	tmplName := "03-target-cluster/target-cluster.tmpl.yaml"
+	if warm {
+		tmplName = "03-target-cluster/target-cluster-warm.tmpl.yaml"
+		deploy.addLog("info", "Warm fast-path — seeding fixed CA + token secrets so KThrees adopts the baked material...")
+		if err := runScriptWithStream("bash " + filepath.Join(dir, "scripts/seed-cluster-secrets.sh")); err != nil {
+			fail("Failed to seed warm-path secrets: " + err.Error())
+			return
+		}
+		deploy.addLog("success", "✓ Warm CA + token secrets seeded")
+	}
+
+	tmplPath := filepath.Join(dir, tmplName)
+	subs := map[string]string{
+		"CLUSTER_NAME": targetClusterName,
+		"IMAGE":        imgSpec.Image,
+		"API_LB_IP":    targetLBIP,
+		"CP_CPU":       profSpec.CPCPU,
+		"CP_MEM":       profSpec.CPMem,
+		"WORKER_CPU":   profSpec.WorkerCPU,
+		"WORKER_MEM":   profSpec.WorkerMem,
+	}
+	rendered, err := renderTemplate(tmplPath, subs)
+	if err != nil {
+		fail("Failed to render cluster template: " + err.Error())
+		return
+	}
+	if err := applyStdin(rendered); err != nil {
 		fail("Failed to apply cluster manifests: " + err.Error())
 		return
 	}
@@ -463,12 +565,16 @@ func HandleDeployCluster(w http.ResponseWriter, r *http.Request) {
 	state := deploy.getState()
 	if state != "running" {
 		profile := r.URL.Query().Get("profile")
-		if profile != "lite" {
+		if _, ok := profileSpecs[profile]; !ok {
 			profile = "full"
+		}
+		image := r.URL.Query().Get("image")
+		if _, ok := imageVariants[image]; !ok {
+			image = warmImageKey
 		}
 		deploy.resetForNewRun()
 		setCurrentOp("deploy")
-		go runDeployment(profile)
+		go runDeployment(profile, image)
 	}
 
 	streamDeployLogs(w, r)

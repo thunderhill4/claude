@@ -4,7 +4,7 @@ import { ChatInput } from './ChatInput';
 import { SuggestedPrompts } from './SuggestedPrompts';
 import { api } from '@/lib/api';
 import type { AgentInfo } from '@/lib/api';
-import type { ChatMessage } from '@/lib/types';
+import type { ChatMessage, Proposal } from '@/lib/types';
 import { Bot } from 'lucide-react';
 
 export function ChatPanel() {
@@ -21,9 +21,8 @@ export function ChatPanel() {
         setSelectedAgent(data.default);
       })
       .catch(() => {
-        // Fallback if kagent controller is unreachable
-        setAgents([{ name: 'k8s-agent', description: 'Kubernetes cluster diagnostics' }]);
-        setSelectedAgent('k8s-agent');
+        setAgents([{ name: 'cluster2-agent', description: 'Cluster2 management-plane agent' }]);
+        setSelectedAgent('cluster2-agent');
       })
       .finally(() => setAgentsLoading(false));
   }, []);
@@ -35,9 +34,6 @@ export function ChatPanel() {
       content: text,
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, userMsg]);
-    setStreaming(true);
-
     const assistantId = crypto.randomUUID();
     const assistantMsg: ChatMessage = {
       id: assistantId,
@@ -45,15 +41,42 @@ export function ChatPanel() {
       content: '',
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, assistantMsg]);
+
+    // Build the rolling history we'll send to the backend (text-only).
+    // Messages array as it stands BEFORE we add the new user/assistant pair.
+    const history = messages
+      .filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content))
+      .map((m) => ({ role: m.role, content: m.content }));
+    history.push({ role: 'user', content: text });
+
+    setMessages((prev) => [...prev, userMsg, assistantMsg]);
+    setStreaming(true);
 
     try {
-      for await (const chunk of api.sendChat(text, selectedAgent)) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content + chunk } : m,
-          ),
-        );
+      for await (const env of api.sendChat(history, selectedAgent)) {
+        if (env.type === 'text') {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: m.content + env.text } : m,
+            ),
+          );
+        } else if (env.type === 'proposal') {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, proposal: env.proposal, proposalStatus: 'pending' }
+                : m,
+            ),
+          );
+        } else if (env.type === 'error') {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: m.content + `\n\n_${env.error}_` }
+                : m,
+            ),
+          );
+        }
       }
     } catch {
       setMessages((prev) =>
@@ -66,11 +89,64 @@ export function ChatPanel() {
     } finally {
       setStreaming(false);
     }
-  }, [selectedAgent]);
+  }, [selectedAgent, messages]);
+
+  const approveProposal = useCallback(async (messageId: string, proposal: Proposal) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, proposalStatus: 'approved', toolSteps: [] } : m,
+      ),
+    );
+    setStreaming(true);
+    try {
+      for await (const env of api.executeAction(proposal)) {
+        if (env.type === 'tool_step') {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId
+                ? { ...m, toolSteps: [...(m.toolSteps ?? []), env.step] }
+                : m,
+            ),
+          );
+        } else if (env.type === 'text') {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId ? { ...m, content: m.content + env.text } : m,
+            ),
+          );
+        } else if (env.type === 'error') {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId
+                ? { ...m, content: m.content + `\n\n_${env.error}_` }
+                : m,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? { ...m, content: m.content + `\n\n_Action failed: ${(e as Error).message}_` }
+            : m,
+        ),
+      );
+    } finally {
+      setStreaming(false);
+    }
+  }, []);
+
+  const rejectProposal = useCallback((messageId: string) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, proposalStatus: 'rejected' } : m,
+      ),
+    );
+  }, []);
 
   return (
     <div className="flex h-full flex-col">
-      {/* Agent selector */}
       <div className="flex items-center gap-2 border-b px-4 py-2">
         <label htmlFor="agent-select" className="text-xs font-medium text-muted-foreground">
           Agent:
@@ -103,13 +179,17 @@ export function ChatPanel() {
           <div className="text-center">
             <h2 className="text-xl font-semibold text-foreground">KubeUI Assistant</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Powered by kagent ({selectedAgent}) using Ollama/llama3.2
+              Powered by Sympozium ({selectedAgent})
             </p>
           </div>
           <SuggestedPrompts onSelect={sendMessage} />
         </div>
       ) : (
-        <MessageList messages={messages} />
+        <MessageList
+          messages={messages}
+          onApproveProposal={approveProposal}
+          onRejectProposal={rejectProposal}
+        />
       )}
       <ChatInput onSend={sendMessage} disabled={streaming} />
     </div>

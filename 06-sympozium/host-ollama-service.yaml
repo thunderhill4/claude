@@ -1,0 +1,31 @@
+---
+# Shim Service + Endpoints for the host's Ollama (running on the docker
+# bridge gateway, 172.18.0.1:11434). AgentRun pods couldn't dial that IP
+# directly under kindnet's NetworkPolicy enforcement; routing through a
+# Service IP (covered by `sympozium-allow-ollama`) works reliably.
+#
+# DNS: host-ollama.sympozium-system.svc.cluster.local:11434
+apiVersion: v1
+kind: Service
+metadata:
+  name: host-ollama
+  namespace: sympozium-system
+spec:
+  ports:
+  - name: http
+    port: 11434
+    targetPort: 11434
+    protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: host-ollama
+  namespace: sympozium-system
+subsets:
+- addresses:
+  - ip: 172.18.0.1
+  ports:
+  - name: http
+    port: 11434
+    protocol: TCP

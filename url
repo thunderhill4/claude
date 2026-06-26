@@ -1,0 +1,123 @@
+claude --resume fdb19d45-052c-4e1b-aba6-f5bc4e758cac
+ To hit ≤60s you need one of:
+  - D — Single-node cluster (drop worker MachineDeployment): ~60–80s, trivial change to target-cluster-lite.yaml
+  - A — Pre-initialized cluster state baked into image (etcd + certs + token): ~40–60s, medium complexity (etcd identity regen on first boot)
+  - B — Warm VM pool (keep VMs pre-booted, reconfigure on deploy): <30s, bypasses CAPI model
+  - C — VM memory snapshot restore: <30s, high complexity
+ 
+ claude --resume "sub-60s-golden-image-provisioning"
+
+ ❯ /context
+  ⎿  Context Usage
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   Opus 4.7
+     ⛁ ⛀ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   claude-opus-4-7
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   240.8k/200k tokens (120%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   Estimated usage by category
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System prompt: 8.8k tokens (4.4%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ System tools: 13.6k tokens (6.8%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Custom agents: 353 tokens (0.2%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Memory files: 5k tokens (2.5%)
+     ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁ ⛁   ⛁ Skills: 2.2k tokens (1.1%)
+                           ⛁ Messages: 209.5k tokens (104.8%)
+
+     MCP tools · /mcp (loaded on-demand)
+
+     Available
+     ├ mcp__claude_ai_Gmail__create_draft
+     ├ mcp__claude_ai_Gmail__create_label
+     ├ mcp__claude_ai_Gmail__get_thread
+     ├ mcp__claude_ai_Gmail__list_drafts
+     ├ mcp__claude_ai_Gmail__list_labels
+     ├ mcp__claude_ai_Gmail__search_threads
+     ├ mcp__claude_ai_Google_Calendar__authenticate
+     ├ mcp__claude_ai_Google_Calendar__complete_authentication
+     ├ mcp__claude_ai_Google_Drive__authenticate
+     ├ mcp__claude_ai_Google_Drive__complete_authentication
+     ├ mcp__plugin_figma_figma__authenticate
+     └ mcp__plugin_figma_figma__complete_authentication
+
+     Custom agents · /agents
+
+     Plugin
+     └ superpowers:code-reviewer: 353 tokens
+
+     Memory files · /memory
+     └ CLAUDE.md: 5k tokens
+
+     Skills · /skills
+
+     Plugin
+     ├ figma-generate-design: 183 tokens
+     ├ figma-use: 141 tokens
+     ├ figma-generate-library: 114 tokens
+     ├ figma-implement-design: 94 tokens
+     ├ figma-create-design-system-rules: 90 tokens
+     ├ figma-code-connect: 68 tokens
+     ├ frontend-design: 67 tokens
+     ├ frontend-design: 67 tokens
+     ├ verification-before-completion: 67 tokens
+     ├ receiving-code-review: 67 tokens
+     ├ finishing-a-development-branch: 61 tokens
+     ├ using-git-worktrees: 59 tokens
+     ├ brainstorming: 56 tokens
+     ├ using-superpowers: 47 tokens
+     ├ dispatching-parallel-agents: 37 tokens
+     ├ requesting-code-review: 36 tokens
+     ├ executing-plans: 33 tokens
+     ├ systematic-debugging: 31 tokens
+     ├ subagent-driven-development: 31 tokens
+     ├ writing-skills: 31 tokens
+     ├ test-driven-development: 29 tokens
+     ├ writing-plans: 28 tokens
+     ├ superpowers:execute-plan: 22 tokens
+     ├ superpowers:brainstorm: 21 tokens
+     └ superpowers:write-plan: 21 tokens
+
+      Suggestions
+      ⚠ Bash results using 39.2k tokens (20%) → save ~19.6k
+        Pipe output through head, tail, or grep to reduce result size. Avoid cat on large files — use Read with offset/limit instead.
+
+      ⚠ Context is 120% full
+        Autocompact will trigger soon, which discards older messages. Use /compact now to control what gets kept.
+
+      ℹ File reads using 23k tokens (11%) → save ~6.9k
+        If you are re-reading files, consider referencing earlier reads. Use offset/limit for large files.
+
+
+  Diagnosis: Ollama on CPU takes ~28 s for a cold load of llama3.2. A warmed model then responds in 0.2 s. But the Sympozium agent-runner's Go HTTP
+  client gives up before the cold load finishes, reporting as dial tcp: i/o timeout. Even after a host-side warmup, subsequent calls from the
+  agent-runner keep failing — suggests the agent-runner may use a very short per-request timeout, or that the Ollama model unloads between calls.
+
+  Recommended next step (pick one):
+  1. Set OLLAMA_KEEP_ALIVE=24h on the host's Ollama service and warm the model once after restart.
+  2. Switch baseURL and provider to a hosted LLM (OpenAI / Anthropic) with a real API key in the llm-credentials Secret — avoids any CPU-inference
+  latency.
+  3. Deploy Ollama in-cluster (a Deployment + PVC for model cache) so the agent uses a pod-network endpoint — eliminates both cold-start sensitivity
+  and bridge-IP reachability concerns.
+
+  Saved memory about the Kind/Ollama pattern and Sympozium migration so this context survives future sessions. Let me know which direction you want to
+  take.
+  New files in 06-sympozium/:
+  - cost-analyzer.yaml — SympoziumInstance; idle-VM detector + stopper
+  - incident-responder.yaml — SympoziumInstance; stuck-VM diagnoser + restarter
+  - ollama-warm.sh — keeps llama3.2 resident (keep_alive: 24h) — the "fix"
+  - demo-sympozium.sh — end-to-end demo (stages a stopped VM, has the agent repair it; then has the cost agent stop an idle one)
+
+  Modified: sympozium-lb-setup.sh (patches .218/.219), Makefile (four new targets), CLAUDE.md (IP table), README.md (demo subsection).
+
+  To run when you have a live cluster
+
+  make sympozium-warm          # keep llama3.2 resident (~30s first time)
+  make sympozium-demo-agents   # apply CRs + LB patches
+  make sympozium-demo          # run the full demo
+  make sympozium-demo-clean    # restore VMs + delete demo agents
+
+  The demo script exits 0 even if the LLM misfires on a phase — it warns honestly rather than faking success. Skipped live-cluster smoke tests per your
+   direction; syntax checks and make -n all pass.
+
+✻ Baked for 6m 23s
+
+❯ /model
+  ⎿  Kept model as Opus 4.7
+        

@@ -1,0 +1,39 @@
+# cluster2-agent — SympoziumInstance that analyzes cluster2 itself
+# (KubeVirt VMs, CDI DataVolumes, CAPI Clusters, Kind nodes).
+#
+# RBAC and kubectl are provided by the built-in `k8s-ops` SkillPack's sidecar;
+# no ServiceAccount needs to be defined here.
+# The built-in `web-endpoint` SkillPack exposes this agent as an OpenAI-compatible
+# HTTP endpoint on port 8080.
+
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumInstance
+metadata:
+  name: cluster2-agent
+  namespace: sympozium-system
+  annotations:
+    sympozium.ai/description: "Cluster2 management-plane agent (KubeVirt VMs, CDI, CAPI, cluster nodes)"
+spec:
+  agents:
+    default:
+      model: qwen2.5:7b
+      # In-cluster shim Service (Endpoints → 172.18.0.1:11434) — AgentRun pods
+      # can't reach the docker-bridge gateway directly; Service IPs work.
+      baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+      sandbox:
+        enabled: false
+      # NOTE: 0.9.1 CRD does not support systemPrompt. Persona/behavior is
+      # injected by the kubeui backend as a system message on every chat
+      # (see ui/backend/handlers/ai.go).
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  skills:
+    - skillPackRef: k8s-ops
+    - skillPackRef: web-endpoint
+  policyRef: sandbox-restricted
+  memory:
+    enabled: false
+  observability:
+    enabled: false

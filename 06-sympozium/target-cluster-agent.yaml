@@ -1,0 +1,71 @@
+# target-cluster-agent — SympoziumInstance that analyzes the target-cluster
+# (k3s deployments, pods, services, istio workloads).
+#
+# Uses the custom `target-k8s-ops` SkillPack (defined below) which is a
+# copy of the built-in k8s-ops sidecar image with KUBECONFIG pointed at
+# the target-cluster kubeconfig Secret (created by install-sympozium.sh).
+
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: SkillPack
+metadata:
+  name: target-k8s-ops
+  namespace: sympozium-system
+spec:
+  category: kubernetes
+  runtimeRequirements:
+    minCPU: 100m
+    minMemory: 256Mi
+  sidecar:
+    image: ghcr.io/sympozium-ai/sympozium/skill-k8s-ops:latest
+    mountWorkspace: true
+    env:
+      - name: KUBECONFIG
+        value: /etc/target-kube/kubeconfig
+    secretRef: target-cluster-kubeconfig
+    secretMountPath: /etc/target-kube
+    resources:
+      cpu: 100m
+      memory: 256Mi
+  skills:
+    - name: target-k8s-ops
+      description: "kubectl against the target-cluster using the mounted kubeconfig"
+      content: |
+        # Target-Cluster Kubernetes Operations
+
+        You have kubectl access to the target k3s cluster via the kubeconfig
+        mounted at `/etc/target-kube/kubeconfig` (the `KUBECONFIG` environment
+        variable is already set). You can inspect deployments, pods, services,
+        namespaces, events, Istio workloads, and any other resources in the
+        target cluster.
+
+        The target cluster is a k3s cluster provisioned as KubeVirt VMs on the
+        management cluster (cluster2). It is reachable at its own API server
+        endpoint (see the mounted kubeconfig).
+
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumInstance
+metadata:
+  name: target-cluster-agent
+  namespace: sympozium-system
+  annotations:
+    sympozium.ai/description: "Target-cluster workload agent (deployments, pods, services, Istio)"
+spec:
+  agents:
+    default:
+      model: llama3.2
+      baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+      sandbox:
+        enabled: false
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  skills:
+    - skillPackRef: target-k8s-ops
+    - skillPackRef: web-endpoint
+  policyRef: target-reach
+  memory:
+    enabled: false
+  observability:
+    enabled: false

@@ -1,4 +1,4 @@
-import type { KubeNode, Pod, VirtualMachine, KubeEvent, ClusterStatus, Namespace, DeployLogEntry, TargetClusterStatus, DVImage, RegistryImage, RegistryConfig, ScanRequest, ScanResult, RegistryScanRequest, RegistryScanResult, RulesResponse } from './types';
+import type { KubeNode, Pod, VirtualMachine, KubeEvent, ClusterStatus, Namespace, DeployLogEntry, TargetClusterStatus, DVImage, RegistryImage, RegistryConfig, ScanRequest, ScanResult, RegistryScanRequest, RegistryScanResult, RulesResponse, ChatEnvelope, Proposal } from './types';
 
 const BASE = '/api/v1';
 
@@ -74,8 +74,11 @@ export const api = {
       }
     }
   },
-  deployCluster: async function* (profile: 'lite' | 'full' = 'full'): AsyncGenerator<DeployLogEntry> {
-    const res = await fetch(`${BASE}/cluster/deploy?profile=${profile}`, { method: 'POST' });
+  deployCluster: async function* (
+    profile: 'lite' | 'full' = 'full',
+    image: 'warm' | 'noble' | 'minimal' = 'warm',
+  ): AsyncGenerator<DeployLogEntry> {
+    const res = await fetch(`${BASE}/cluster/deploy?profile=${profile}&image=${image}`, { method: 'POST' });
     if (!res.ok) throw new Error(`Deploy error: ${res.status}`);
     const reader = res.body?.getReader();
     if (!reader) return;
@@ -143,34 +146,54 @@ export const api = {
       }
     }
   },
-  sendChat: async function* (message: string, agent?: string): AsyncGenerator<string> {
+  sendChat: async function* (
+    messages: { role: 'user' | 'assistant'; content: string }[],
+    agent?: string,
+  ): AsyncGenerator<ChatEnvelope> {
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, ...(agent ? { agent } : {}) }),
+      body: JSON.stringify({ messages, ...(agent ? { agent } : {}) }),
     });
     if (!res.ok) throw new Error(`Chat error: ${res.status}`);
-    const reader = res.body?.getReader();
-    if (!reader) return;
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const text = decoder.decode(value, { stream: true });
-      for (const line of text.split('\n')) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          if (data === '[DONE]') return;
-          try {
-            yield JSON.parse(data) as string;
-          } catch {
-            yield data;
-          }
-        }
-      }
-    }
+    yield* parseEnvelopeStream(res);
+  },
+  executeAction: async function* (proposal: Proposal): AsyncGenerator<ChatEnvelope> {
+    const res = await fetch('/api/ai/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: proposal.action, profile: proposal.profile }),
+    });
+    if (!res.ok) throw new Error(`Action error: ${res.status}`);
+    yield* parseEnvelopeStream(res);
   },
 };
+
+async function* parseEnvelopeStream(res: Response): AsyncGenerator<ChatEnvelope> {
+  const reader = res.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n')) !== -1) {
+      const line = buf.slice(0, idx);
+      buf = buf.slice(idx + 1);
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (!data) continue;
+      if (data === '[DONE]') return;
+      try {
+        yield JSON.parse(data) as ChatEnvelope;
+      } catch {
+        // Skip malformed lines
+      }
+    }
+  }
+}
 
 // ── Security API ─────────────────────────────────────────────────────────────
 

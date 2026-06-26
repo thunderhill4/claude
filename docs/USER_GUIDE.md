@@ -101,10 +101,10 @@ The default mode for cluster operations:
 
 Natural language chat interface for Kubernetes operations:
 
-- Powered by **kagent** (AI agent framework)
+- Powered by **Sympozium** (Kubernetes-native agentic control plane) via OpenAI-compatible serving mode
 - Supports multiple agents:
-  - **k8s-agent**: Manages the management cluster (cluster2)
-  - **target-cluster-agent**: Manages the target cluster
+  - **cluster2-agent**: Manages the management cluster (CAPI, KubeVirt VMs, CDI, nodes)
+  - **target-cluster-agent**: Manages the target cluster (deployments, pods, services, Istio)
 - Ask questions like:
   - "Show me all pods in the sample namespace"
   - "What's the status of the target cluster?"

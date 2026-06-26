@@ -1,0 +1,17 @@
+---
+# Keeps the shared llama3.2 model resident in Ollama by dispatching a trivial
+# AgentRun against cluster2-agent every 4 minutes. Cold-start on CPU is ~28-30s;
+# this schedule removes that latency from the first real KubeUI chat request.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumSchedule
+metadata:
+  name: ollama-warm
+  namespace: sympozium-system
+spec:
+  instanceRef: cluster2-agent
+  schedule: "*/4 * * * *"
+  type: heartbeat
+  concurrencyPolicy: Replace
+  includeMemory: false
+  task: |
+    ping

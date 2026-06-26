@@ -1,0 +1,221 @@
+---
+# Templated WARM-boot variant — target time-to-ready <40s. Rendered by the UI
+# backend (ui/backend/handlers/cluster_deploy.go) and by scripts/render-cluster.sh.
+# For the hand-maintained static copy and the full design rationale, see
+# 03-target-cluster/target-cluster-warm.yaml.
+#
+# Placeholders (same set as target-cluster.tmpl.yaml):
+#   {{CLUSTER_NAME}}  — cluster name (default: target-cluster)
+#   {{IMAGE}}         — full containerDisk ref (the :warm golden image)
+#   {{API_LB_IP}}     — MetalLB-advertised API server VIP (baked into the warm
+#                       serving cert SAN — keep 172.18.255.215 for the :warm image)
+#   {{CP_CPU}}        — control-plane vCPU count
+#   {{CP_MEM}}        — control-plane memory
+#   {{WORKER_CPU}}    — worker vCPU count
+#   {{WORKER_MEM}}    — worker memory
+#
+# REQUIRED ORDER: scripts/seed-cluster-secrets.sh MUST run before this manifest is
+# applied, so KThrees adopts the pre-seeded CA/token secrets that match the baked
+# leaves. DEMO USE ONLY: fixed CA + token are committed (see warm-ca/).
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: Cluster
+metadata:
+  name: {{CLUSTER_NAME}}
+  namespace: default
+spec:
+  clusterNetwork:
+    pods:
+      cidrBlocks:
+        - 10.42.0.0/16
+    services:
+      cidrBlocks:
+        - 10.43.0.0/16
+  controlPlaneRef:
+    apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+    kind: KThreesControlPlane
+    name: {{CLUSTER_NAME}}-control-plane
+  infrastructureRef:
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtCluster
+    name: {{CLUSTER_NAME}}
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtCluster
+metadata:
+  name: {{CLUSTER_NAME}}
+  namespace: default
+spec:
+  controlPlaneServiceTemplate:
+    metadata:
+      annotations:
+        metallb.universe.tf/loadBalancerIPs: "{{API_LB_IP}}"
+    spec:
+      type: LoadBalancer
+---
+apiVersion: controlplane.cluster.x-k8s.io/v1beta2
+kind: KThreesControlPlane
+metadata:
+  name: {{CLUSTER_NAME}}-control-plane
+  namespace: default
+spec:
+  replicas: 1
+  version: v1.31.4+k3s1
+  kthreesConfigSpec:
+    agentConfig:
+      airGapped: true
+    serverConfig:
+      cloudProviderName: ""
+      disableComponents:
+        - servicelb
+        - traefik
+      tlsSan:
+        - {{API_LB_IP}}
+    # WARM path: force the IP-independent SQLite/kine datastore (strip KThrees's
+    # cluster-init + drop the etcd-proxy manifest) so the baked state is portable
+    # with no --cluster-reset and no cert purge. See target-cluster-warm.yaml.
+    preK3sCommands:
+      - mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
+      - sed -i '/cluster-init/d' /etc/rancher/k3s/config.yaml
+      - rm -f /var/lib/rancher/k3s/server/manifests/etcd-proxy.yaml
+    postK3sCommands:
+      # Reap the bake VM's leftover Node object (carried in the warm SQLite state)
+      # once the API is up. Must come first — see target-cluster-warm.yaml note.
+      - systemd-run --unit=warm-ghost-node-cleanup --no-block /bin/bash -c 'for i in $(seq 1 60); do /usr/local/bin/k3s kubectl delete node ubuntu-bake-vm-warm --ignore-not-found && break; sleep 2; done'
+      - test -f /var/lib/rancher/k3s/.firstboot-done && exit 0 || (systemctl daemon-reload && systemctl enable k3s && systemctl start k3s)
+  machineTemplate:
+    infrastructureRef:
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      kind: KubevirtMachineTemplate
+      name: {{CLUSTER_NAME}}-cp
+      namespace: default
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: {{CLUSTER_NAME}}-cp
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: {{CP_CPU}}
+                memory:
+                  guest: {{CP_MEM}}
+                ioThreadsPolicy: shared
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - bridge: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - containerDisk:
+                    image: {{IMAGE}}
+                  name: systemdisk
+---
+# Static worker bootstrap. Embeds the fixed WARM token so the agent can join the
+# moment the CP API answers; the k3s agent retries the server VIP until reachable.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{CLUSTER_NAME}}-workers-bootstrap
+  namespace: default
+type: cluster.x-k8s.io/secret
+stringData:
+  value: |
+    #cloud-config
+
+    write_files:
+    -   path: /etc/rancher/k3s/config.yaml
+        owner: root:root
+        permissions: '0640'
+        content: |
+          kubelet-arg:
+          - cloud-provider=external
+          server: https://{{API_LB_IP}}:6443
+          token: f00dcafef00dcafef00dcafef00dcafe
+
+    runcmd:
+      - "mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys"
+      - INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC='agent' sh /opt/install.sh && mkdir -p /run/cluster-api && echo success > /run/cluster-api/bootstrap-success.complete
+      - "systemctl daemon-reload && systemctl enable k3s-agent && systemctl start k3s-agent"
+---
+apiVersion: cluster.x-k8s.io/v1beta1
+kind: MachineDeployment
+metadata:
+  name: {{CLUSTER_NAME}}-workers
+  namespace: default
+  annotations:
+    # Skip CAPI's "ControlPlaneIsStable" preflight so the worker MachineSet scales
+    # up immediately and the worker VM boots in parallel with the control plane.
+    machineset.cluster.x-k8s.io/skip-preflight-checks: All
+spec:
+  clusterName: {{CLUSTER_NAME}}
+  replicas: 1
+  selector:
+    matchLabels: {}
+  template:
+    spec:
+      clusterName: {{CLUSTER_NAME}}
+      version: v1.31.4+k3s1
+      bootstrap:
+        dataSecretName: {{CLUSTER_NAME}}-workers-bootstrap
+      infrastructureRef:
+        apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+        kind: KubevirtMachineTemplate
+        name: {{CLUSTER_NAME}}-workers
+        namespace: default
+---
+apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+kind: KubevirtMachineTemplate
+metadata:
+  name: {{CLUSTER_NAME}}-workers
+  namespace: default
+spec:
+  template:
+    spec:
+      virtualMachineBootstrapCheck:
+        checkStrategy: none
+      virtualMachineTemplate:
+        metadata:
+          namespace: default
+        spec:
+          runStrategy: Always
+          template:
+            spec:
+              domain:
+                cpu:
+                  cores: {{WORKER_CPU}}
+                memory:
+                  guest: {{WORKER_MEM}}
+                ioThreadsPolicy: shared
+                devices:
+                  disks:
+                    - disk:
+                        bus: virtio
+                      name: systemdisk
+                  interfaces:
+                    - bridge: {}
+                      name: default
+              networks:
+                - name: default
+                  pod: {}
+              volumes:
+                - containerDisk:
+                    image: {{IMAGE}}
+                  name: systemdisk

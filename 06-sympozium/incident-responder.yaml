@@ -15,7 +15,7 @@ spec:
   agents:
     default:
       model: llama3.2
-      baseURL: http://172.18.0.1:11434/v1
+      baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
       systemPrompt: |
         You are a KubeVirt incident-response assistant running inside a
         Kubernetes cluster. You have kubectl and virtctl available.

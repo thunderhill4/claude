@@ -91,6 +91,7 @@ export function ClusterManager() {
   const [activeOp, setActiveOp] = useState<'deploy' | 'delete' | 'istio' | null>(null);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [profile, setProfile] = useState<'lite' | 'full'>('full');
+  const [imageVariant, setImageVariant] = useState<'warm' | 'noble' | 'minimal'>('warm');
   const logEndRef = useRef<HTMLDivElement>(null);
 
   const refreshStatus = useCallback(async () => {
@@ -103,6 +104,8 @@ export function ClusterManager() {
   }, []);
 
   useEffect(() => {
+    // refreshStatus() sets state asynchronously after an await, not a synchronous cascade.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshStatus();
     const id = setInterval(refreshStatus, 10_000);
     return () => clearInterval(id);
@@ -117,7 +120,11 @@ export function ClusterManager() {
   useEffect(() => {
     if (status?.state === 'running' && !streaming) {
       const op = (status.operation || 'deploy') as 'deploy' | 'delete' | 'istio';
+      // Intentional one-shot attach to an in-progress run discovered on mount.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setActiveOp(op);
+      // attachToStream is a hoisted function declaration defined below.
+      // eslint-disable-next-line react-hooks/immutability
       attachToStream();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -145,7 +152,7 @@ export function ClusterManager() {
     if (streaming) return;
     setLogs([]);
     setActiveOp('deploy');
-    runStream(api.deployCluster(profile));
+    runStream(api.deployCluster(profile, imageVariant));
   }
 
   function startIstio() {
@@ -287,7 +294,7 @@ export function ClusterManager() {
 
       {/* ── Profile selector ─────────────────────────────────── */}
       <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">Profile:</span>
+        <span className="text-sm text-muted-foreground w-16">Profile:</span>
         <button
           onClick={() => setProfile('lite')}
           className={`px-3 py-1 text-xs rounded-full border transition-colors ${
@@ -311,6 +318,41 @@ export function ClusterManager() {
         {isRunning && (
           <span className="text-xs text-muted-foreground">(applies to next deploy)</span>
         )}
+      </div>
+
+      {/* ── Image selector ───────────────────────────────────── */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-muted-foreground w-16">Image:</span>
+        <button
+          onClick={() => setImageVariant('warm')}
+          className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+            imageVariant === 'warm'
+              ? 'bg-primary text-primary-foreground border-primary ring-2 ring-primary/40'
+              : 'bg-secondary text-secondary-foreground border-border hover:bg-accent hover:text-accent-foreground'
+          }`}
+        >
+          {imageVariant === 'warm' && <span className="mr-1">✓</span>}Warm · ~40s fast-path
+        </button>
+        <button
+          onClick={() => setImageVariant('noble')}
+          className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+            imageVariant === 'noble'
+              ? 'bg-primary text-primary-foreground border-primary ring-2 ring-primary/40'
+              : 'bg-secondary text-secondary-foreground border-border hover:bg-accent hover:text-accent-foreground'
+          }`}
+        >
+          {imageVariant === 'noble' && <span className="mr-1">✓</span>}Ubuntu Noble · pre-init
+        </button>
+        <button
+          onClick={() => setImageVariant('minimal')}
+          className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+            imageVariant === 'minimal'
+              ? 'bg-primary text-primary-foreground border-primary ring-2 ring-primary/40'
+              : 'bg-secondary text-secondary-foreground border-border hover:bg-accent hover:text-accent-foreground'
+          }`}
+        >
+          {imageVariant === 'minimal' && <span className="mr-1">✓</span>}Ubuntu Minimal · pre-init
+        </button>
       </div>
 
       {/* ── Controls ─────────────────────────────────────────── */}
@@ -385,6 +427,9 @@ export function ClusterManager() {
               <p className="text-xs">
                 <strong>Lite profile:</strong> CP 2 CPU · 4 Gi &nbsp;|&nbsp; Worker 2 CPU · 4 Gi &nbsp;—&nbsp; low resource use<br/>
                 <strong>Full profile:</strong> CP 4 CPU · 8 Gi &nbsp;|&nbsp; Worker 4 CPU · 6 Gi &nbsp;—&nbsp; ~2–4 min faster spin-up
+              </p>
+              <p className="text-xs">
+                <strong>Warm image (default):</strong> seeds fixed CAs + token and boots the worker in parallel on a pre-baked golden image — targets time-to-ready <strong>~40s</strong>. <strong>Pre-init</strong> images use the standard sequential path. (Demo use only — warm CA/token are committed.)
               </p>
               <p className="font-medium text-foreground mt-2">What Install Istio + nginx does:</p>
               <ol className="list-decimal list-inside space-y-1.5 text-xs">

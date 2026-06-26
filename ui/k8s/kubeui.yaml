@@ -27,6 +27,9 @@ rules:
   - apiGroups: ["cluster.x-k8s.io"]
     resources: ["clusters", "machines", "machinedeployments"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["sympozium.ai"]
+    resources: ["sympoziuminstances"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -67,10 +70,16 @@ spec:
           image: kubeui-backend:latest
           imagePullPolicy: IfNotPresent
           env:
-            - name: KAGENT_AGENT_NAME
-              value: "k8s-agent"
-            - name: KAGENT_AGENT_NAMESPACE
-              value: "kagent"
+            - name: SYMPOZIUM_NAMESPACE
+              value: "sympozium-system"
+            - name: SYMPOZIUM_DEFAULT_AGENT
+              value: "cluster2-agent"
+            - name: SYMPOZIUM_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sympozium-ui-token
+                  key: token
+                  optional: true
             - name: SECURITY_AGENT_URL
               value: "http://security-agent.kubeui.svc.cluster.local:8082"
           ports:

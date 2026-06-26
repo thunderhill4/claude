@@ -1,0 +1,31 @@
+# Helm values for Sympozium control plane.
+# Reference: https://deploy.sympozium.ai/docs/reference/helm
+
+# LLM provider config. Sympozium supports any OpenAI-compatible endpoint.
+# Default here targets an Ollama instance reachable from cluster2 — adjust to
+# your environment (localhost:11434 only works if the pod can route to the host).
+#
+# For a remote provider (Anthropic / OpenAI / Azure), set `apiKey` and update
+# `baseURL` accordingly.
+llm:
+  provider: ollama
+  # In-cluster shim Service (06-sympozium/host-ollama-service.yaml) whose
+  # Endpoints point at the docker bridge gateway 172.18.0.1:11434. AgentRun
+  # pods can't dial the gateway directly under kindnet NetworkPolicy
+  # enforcement; the Service IP path is covered by `sympozium-allow-ollama`.
+  baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+  model: llama3.2
+  # apiKey: ""                    # required for OpenAI/Anthropic; unused for Ollama
+
+# Control plane components.
+apiserver:
+  replicas: 1
+  service:
+    type: ClusterIP   # set to LoadBalancer + metallb annotation if external admin access is needed
+
+controller:
+  replicas: 1
+
+# NATS event bus (bundled). Leave defaults unless cluster has resource limits.
+nats:
+  enabled: true

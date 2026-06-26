@@ -1,0 +1,36 @@
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: sandbox-restricted
+  namespace: sympozium-system
+spec:
+  featureGates:
+    browser-automation: false
+    code-execution: true
+    file-access: true
+    sub-agents: true
+  networkPolicy:
+    allowDNS: true
+    allowEventBus: true
+    denyAll: true
+    allowedEgress:
+      - host: 172.18.0.1
+        port: 11434
+      - host: kubernetes.default.svc.cluster.local
+        port: 443
+  sandboxPolicy:
+    allowHostMounts: false
+    maxCPU: "4"
+    maxMemory: 8Gi
+    required: false
+    seccompProfile:
+      type: RuntimeDefault
+  subagentPolicy:
+    maxConcurrent: 5
+    maxDepth: 3
+  toolGating:
+    defaultAction: allow
+    rules:
+      - action: deny
+        tool: fetch_url

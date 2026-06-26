@@ -2,6 +2,10 @@
 
 ## Project Overview
 
+# Sovereign Cloud × Sympozium: Agentic AI Strategy
+## Active Plan
+Refer to `Sovereign_Cloud_Agentic_Strategy.md` for the current implementation roadmap. 
+Always verify changes against the "Architecture Constraints" section in that file.
 This repo provisions Kubernetes target clusters as KubeVirt VMs on a Kind-based management cluster, with Istio ambient mesh for cross-cluster service discovery and a full-stack web UI for cluster management, AI-powered operations, and service mesh visualization.
 
 **Clusters:**
@@ -17,8 +21,9 @@ This repo provisions Kubernetes target clusters as KubeVirt VMs on a Kind-based 
 ├── 01-metallb/            # MetalLB L2 LoadBalancer config + install script
 ├── 02-capi-init/          # Cluster API provider initialization
 ├── 03-target-cluster/     # Target cluster YAML manifests + generator
-│   ├── target-cluster.yaml       # Full profile (4 CPU, 8Gi CP / 6Gi worker)
-│   └── target-cluster-lite.yaml  # Lite profile (2 CPU, 4Gi)
+│   ├── target-cluster.yaml          # Full profile (4 CPU, 8Gi CP / 6Gi worker)
+│   ├── target-cluster-lite.yaml     # Lite profile (2 CPU, 4Gi)
+│   └── target-cluster-parallel.yaml # Full profile, worker boots in parallel (~61s)
 ├── 04-verify/             # Cluster health verification script
 ├── 05-istio/              # Istio ambient mode install + cross-cluster demo
 ├── ui/                    # Web dashboard (React frontend + Go backend)
@@ -52,7 +57,7 @@ Pool: `172.18.255.200–210` (cluster1), `172.18.255.211–220` (cluster2)
 | 172.18.255.217  | security-agent                 | `ui/k8s/security-agent.yaml`        |
 | 172.18.255.218  | cost-analyzer (Sympozium)      | `sympozium-lb-setup.sh`             |
 | 172.18.255.219  | incident-responder (Sympozium) | `sympozium-lb-setup.sh`             |
-| 172.18.255.220  | free                           |                                     |
+| 172.18.255.220  | host-ollama-lb (optional)      | `snippets/host-ollama/` (`WITH_LB=1`) |
 
 **Critical:** Never reassign the IPs above without updating the corresponding source file AND `sympozium-lb-setup.sh` AND `run-ui.sh`.
 
@@ -72,10 +77,32 @@ make ui                 # launch web UI dev servers
 ### Cluster Lifecycle
 
 ```bash
-make target-cluster-lite   # 2 CPU / 4Gi (faster, demo use)
-make target-cluster-full   # 4 CPU / 8Gi (default, production use)
-make clean                 # delete target cluster (CAPI cleans up VMs)
+make target-cluster            # DEFAULT — WARM fast-path (parallel boot, ~40s target)
+make target-cluster-warm       # same warm fast-path, explicit
+make target-cluster-lite       # legacy lite, 2 CPU / 4Gi (sequential, :latest)
+make target-cluster-full       # legacy full, 4 CPU / 8Gi (sequential, :latest)
+make target-cluster-parallel   # full profile, worker boots in parallel (~61s, :latest)
+make clean                     # delete target cluster (CAPI cleans up VMs)
 ```
+
+**Warm fast-path** (`target-cluster-warm.yaml` / `.tmpl.yaml`) — **now the default** for
+`make target-cluster`, `make all`, and the UI's Deploy Cluster (default image option).
+It combines the parallel-boot worker (below) with a **warm-baked golden image** (`:warm`):
+the image carries fixed CAs + token (`03-target-cluster/warm-ca/`) so `scripts/seed-cluster-secrets.sh`
+can pre-seed matching CAPI secrets — KThrees adopts them, so first boot needs **no
+`--cluster-reset` and no cert purge**. Targets time-to-ready **<40s**. The Make target runs
+`ensure-warm-image` first (pre-pulls the `:warm` image, baking it if absent). Fixed CA + token
+are committed — **demo use only**; safe only because exactly one `target-cluster` runs at a time.
+
+**Parallel-boot variant** (`target-cluster-parallel.yaml`): normally CAPI serializes
+worker creation behind the control plane (worker starts ~75s in → ~125s end-to-end).
+This variant boots the worker VM alongside the CP (~61s end-to-end) via three changes:
+a **pre-seeded `target-cluster-token` secret** (KThrees adopts it, so the join token is
+known before the CP exists), a **static worker bootstrap** (`bootstrap.dataSecretName`,
+bypassing the KThrees provider's wait-for-control-plane-initialized gate), and the
+`machineset.cluster.x-k8s.io/skip-preflight-checks: All` annotation (skips CAPI's
+`ControlPlaneIsStable` MachineSet gate). The worker's k3s-agent retries the static CP
+VIP (`172.18.255.215`) until it answers. Token is static/committed — **demo use only**.
 
 ### Web UI Development
 

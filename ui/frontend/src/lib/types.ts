@@ -57,8 +57,25 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   resources?: ResourceRef[];
+  proposal?: Proposal;
+  proposalStatus?: 'pending' | 'approved' | 'rejected';
+  toolSteps?: DeployLogEntry[];
   timestamp: Date;
 }
+
+export interface Proposal {
+  id: string;
+  action: string;
+  profile?: string;
+  reason?: string;
+}
+
+export type ChatEnvelope =
+  | { type: 'text'; text: string }
+  | { type: 'proposal'; proposal: Proposal }
+  | { type: 'tool_step'; step: DeployLogEntry }
+  | { type: 'error'; error: string }
+  | { type: 'done' };
 
 export interface ResourceRef {
   kind: string;

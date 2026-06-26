@@ -98,6 +98,7 @@ func main() {
 	// AI Chat & Agents
 	mux.HandleFunc("/api/ai/chat", handlers.HandleAIChat)
 	mux.HandleFunc("/api/ai/agents", handlers.HandleListAgents)
+	mux.HandleFunc("/api/ai/action", handlers.HandleAIAction)
 
 	// Health check
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

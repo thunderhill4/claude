@@ -121,7 +121,7 @@ src/
 │       └── Diagnostics.tsx     # Issues + recommendations
 └── pages/
     ├── SREDashboard.tsx        # SRE mode page router
-    ├── AIChat.tsx              # AI chat interface (kagent)
+    ├── AIChat.tsx              # AI chat interface (Sympozium)
     └── VisualDashboard.tsx     # Visual mode page router
 ```
 
@@ -143,7 +143,7 @@ backend/
 │   ├── cluster_deploy.go       # POST /api/v1/cluster/{deploy,delete,istio,target-status}
 │   ├── cdi.go                  # GET /api/v1/images (CDI DataVolumes)
 │   ├── registry.go             # GET/DELETE /api/v1/registry/{images,config}
-│   └── ai.go                   # POST /api/ai/chat, GET /api/ai/agents (kagent proxy)
+│   └── ai.go                   # POST /api/ai/chat, GET /api/ai/agents (Sympozium OpenAI-compat proxy)
 └── Dockerfile
 ```
 
@@ -166,17 +166,17 @@ backend/
 | GET | `/api/v1/registry/images` | `HandleRegistryImages` | List registry images |
 | GET | `/api/v1/registry/config` | `HandleRegistryConfig` | Registry configuration |
 | DELETE | `/api/v1/registry/images/{name}:{tag}` | `HandleRegistryDeleteImage` | Delete registry image |
-| POST | `/api/ai/chat` | `HandleAIChat` | AI chat (proxies to kagent) |
+| POST | `/api/ai/chat` | `HandleAIChat` | AI chat (proxies to Sympozium via `/v1/chat/completions`) |
 | GET | `/api/ai/agents` | `HandleListAgents` | List available AI agents |
 
 **CORS**: Allowed origins: `localhost:5173`, `127.0.0.1:5173`, `172.18.255.211` (production LB IP).
 
 **Environment variables** (set by `run-ui.sh`):
-- `KAGENT_AGENT_URL` — kagent agent endpoint (default: `http://172.18.255.212/`)
-- `KAGENT_CONTROLLER_URL` — kagent controller API (default: `http://172.18.255.213:8083/api/agents`)
-- `KAGENT_AGENT_NAME` — default agent name (default: `k8s-agent`)
-- `KAGENT_AGENT_NAMESPACE` — kagent namespace (default: `kagent`)
-- `KAGENT_AGENT_URL_TARGET_CLUSTER_AGENT` — target cluster agent (default: `http://172.18.255.214/`)
+- `SYMPOZIUM_AGENT_URL` — default Sympozium agent base URL (default: `http://172.18.255.213:8080/`)
+- `SYMPOZIUM_AGENT_URL_TARGET_CLUSTER_AGENT` — per-agent override for `target-cluster-agent` (default: `http://172.18.255.214:8080/`)
+- `SYMPOZIUM_DEFAULT_AGENT` — default agent name (default: `cluster2-agent`)
+- `SYMPOZIUM_NAMESPACE` — namespace holding Sympozium control plane + instances (default: `sympozium-system`)
+- `SYMPOZIUM_API_TOKEN` — optional Bearer token for the serving endpoint (from the `sympozium-ui-token` Secret)
 - `CLAUDE_DIR` — project root directory
 
 ### Kubernetes Deployment (`ui/k8s/`)

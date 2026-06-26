@@ -1,0 +1,40 @@
+---
+# AgentRun pods are labeled app.kubernetes.io/part-of=sympozium, which makes
+# them subject to the helm-installed `sympozium-allow-otel` NetworkPolicy
+# (policyType: Egress, only ports 4317/4318 allowed). With kindnet enforcing,
+# that implicitly blocks egress to Ollama on the docker bridge.
+#
+# This policy adds the missing egress paths (DNS + Ollama) for sympozium pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sympozium-allow-ollama
+  namespace: sympozium-system
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/part-of: sympozium
+  policyTypes:
+  - Egress
+  egress:
+  # DNS
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - port: 53
+      protocol: UDP
+    - port: 53
+      protocol: TCP
+  # Ollama via the host-ollama shim Service (Endpoints → 172.18.0.1:11434)
+  - ports:
+    - port: 11434
+      protocol: TCP
+  # Kubernetes API (skill-k8s-ops needs it)
+  - ports:
+    - port: 443
+      protocol: TCP
+    - port: 6443
+      protocol: TCP

@@ -27,7 +27,7 @@ func main() {
 	if ollamaURL := os.Getenv("OLLAMA_URL"); ollamaURL != "" {
 		model := os.Getenv("OLLAMA_MODEL")
 		if model == "" {
-			model = "llama3"
+			model = "gemma2:9b"
 		}
 		llmClient = llm.NewClient(ollamaURL, model)
 		log.Printf("LLM client configured: %s model=%s", ollamaURL, model)
