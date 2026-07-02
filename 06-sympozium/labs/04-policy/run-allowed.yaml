@@ -1,0 +1,25 @@
+# Same task, but with a run-level toolPolicy override attempting to allow
+# fetch_url. Tests whether a run-level override can beat the instance/agent
+# policy's tool-gating deny rule — see README for the observed answer.
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: lab-policy-allowed
+  namespace: sympozium-system
+spec:
+  agentRef: cluster2-agent
+  agentId: primary
+  sessionKey: lab-policy-allowed-1
+  mode: task
+  cleanup: keep
+  model:
+    provider: ollama
+    model: qwen2.5:7b
+    baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+    authSecretRef: llm-credentials
+  toolPolicy:
+    allow:
+      - fetch_url
+  task: |
+    Fetch https://example.com with your fetch_url tool and quote its <title>.
+    If a tool is unavailable or denied, say exactly which tool and why.

@@ -1,0 +1,22 @@
+# Baseline: ask the agent to use fetch_url with no run-level toolPolicy
+# override. cluster2-agent's policyRef (sandbox-restricted) denies fetch_url
+# via toolGating.rules — this run demonstrates that deny in effect.
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: lab-policy-denied
+  namespace: sympozium-system
+spec:
+  agentRef: cluster2-agent
+  agentId: primary
+  sessionKey: lab-policy-denied-1
+  mode: task
+  cleanup: keep
+  model:
+    provider: ollama
+    model: qwen2.5:7b
+    baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+    authSecretRef: llm-credentials
+  task: |
+    Fetch https://example.com with your fetch_url tool and quote its <title>.
+    If a tool is unavailable or denied, say exactly which tool and why.
