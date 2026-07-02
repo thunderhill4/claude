@@ -72,6 +72,15 @@ objects; this is unrelated to the `sandbox-restricted` `SympoziumPolicy`
 UI itself uses (see CLAUDE.md — that SA has explicit VM read grants the
 Sympozium SkillPack doesn't).
 
+> **FIXED (2026-07-02):** `06-sympozium/agent-kubevirt-rbac.yaml` (in the
+> kustomize bundle) now grants the shared `sympozium-agent` ServiceAccount —
+> which every skill sidecar runs as — read-only access to
+> `virtualmachines`/`virtualmachineinstances` (kubevirt.io) and `datavolumes`
+> (cdi.kubevirt.io) via an *additive* ClusterRole, deliberately not patching
+> the Helm-managed SkillPack. Verified end-to-end: re-running lab 02's
+> AgentRun after the fix produced a real VM listing (both `target-cluster`
+> VMs, Running) instead of the permission error.
+
 **2. The report is genuinely incomplete, not truncated by us.** `qwen2.5:7b`
 used all 4 of its tool calls investigating nodes and the VM permission
 error, then ran out of budget and wrote the pods-check *command* into its
@@ -85,9 +94,9 @@ multiple tool-call rounds in the prompt helps.
 
 Fields visible in the CRDs but not exercised in this lab series:
 `channels`/`slackOptions` (chat platform integration), `memory.enabled`
-(persistent context across runs), `observability.enabled` (tracing), and
-fixing the `k8s-ops` SkillPack's RBAC to include `kubevirt.io` if you want
-agents that can actually see VMs.
+(persistent context across runs), and `observability.enabled` (tracing).
+The `kubevirt.io` RBAC gap originally listed here is now fixed — see
+`06-sympozium/agent-kubevirt-rbac.yaml` and the FIXED note above.
 
 ## Cleanup
 

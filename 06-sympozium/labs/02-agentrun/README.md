@@ -88,15 +88,39 @@ tool call / 6,600 tokens:
 > experiencing issues..."
 
 This is real evidence, not a scripted success — and it's honestly imperfect:
-`qwen2.5:7b` made one `kubectl get vm`-style call, got an error (VMs on this
-platform live in non-default namespaces — see `demo-sympozium.sh`'s
-`pick_worker_vm`, which explicitly queries `kubectl get vm -A`), and
-concluded "not installed" rather than retrying with `--all-namespaces`. A
-7B local model in a single tool-call budget will sometimes stop one step
-short of a fully correct answer — worth knowing before you rely on
-single-shot AgentRuns for anything that must be exhaustive. Prompting for
-"use kubectl get vm --all-namespaces explicitly" or raising the task's
-implicit iteration budget expectation closes this gap.
+`qwen2.5:7b` made one `kubectl get vm`-style call, got an error, and
+concluded "not installed" rather than investigating. Two distinct causes
+were later untangled (2026-07-02):
+
+1. **A real RBAC gap** — the `k8s-ops` SkillPack's bundled RBAC has no
+   `kubevirt.io` apiGroup, so the sidecar's `sympozium-agent`
+   ServiceAccount genuinely couldn't read VMs at all. **Now fixed** by
+   `06-sympozium/agent-kubevirt-rbac.yaml` (additive read-only
+   ClusterRole in the kustomize bundle; verified with
+   `kubectl auth can-i list virtualmachines.kubevirt.io
+   --as=system:serviceaccount:sympozium-system:sympozium-agent` → `yes`).
+2. **7B-model command fumbling** — even with permissions fixed, successive
+   runs typo'd the resource name (`vmachines`, `vmvm`) and reported "no
+   VMs / not installed". Fixed by making the task prompt spell out the
+   exact command (`kubectl get virtualmachines --all-namespaces` — now in
+   `agentrun.yaml`).
+
+With both fixes, the run completes fully and correctly:
+
+> | Dimension | Status |
+> |-----------|--------|
+> | Nodes | ✅ |
+> | KubeVirt VMs | ✅ |
+>
+> "...There are also two KubeVirt VirtualMachines in the default namespace,
+> both in a `Running` state... indicating a healthy state overall."
+
+The general lesson stands: a 7B local model in a small tool-call budget
+will sometimes stop one step short of a correct answer, and can mask a
+*real* infrastructure problem (the RBAC gap) behind a plausible-sounding
+wrong conclusion ("KubeVirt is not installed"). For anything that must be
+exhaustive, spell out exact commands in the task and verify surprising
+claims out-of-band (`kubectl auth can-i` is your friend).
 
 ## Other fields worth knowing
 

@@ -18,4 +18,6 @@ resources:
   - schedules/ollama-warm.yaml
   - host-ollama-service.yaml
   - agent-egress-ollama.yaml
+  - agent-kubevirt-rbac.yaml
+  - node-probe-loopback-ds.yaml
   - cluster2-agent.yaml

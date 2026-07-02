@@ -34,6 +34,7 @@ spec:
   skills:
     - skillPackRef: k8s-ops
   task: |
-    List this cluster's nodes and all KubeVirt VirtualMachines with their
-    status. Then give a one-paragraph health summary. Read-only: do not
-    change anything.
+    List this cluster's nodes (kubectl get nodes -o wide) and all KubeVirt
+    VirtualMachines with their status (use exactly:
+    kubectl get virtualmachines --all-namespaces). Then give a one-paragraph
+    health summary. Read-only: do not change anything.
