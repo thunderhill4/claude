@@ -20,7 +20,9 @@ work — reports, sweeps, housekeeping — without any external trigger.
 kubectl apply -f 06-sympozium/labs/03-schedule/agent.yaml
 kubectl apply -f 06-sympozium/labs/03-schedule/instance.yaml
 kubectl apply -f 06-sympozium/labs/03-schedule/schedule.yaml
-# wait up to 2 minutes for the first tick, then:
+# The first run may fire IMMEDIATELY on creation (observed on a re-run:
+# .status showed totalRuns:1 in the same second as apply), or on the next
+# cron tick (up to 2 minutes) — check .status either way:
 kubectl get agentruns -n sympozium-system | grep lab-schedule-report
 kubectl get agentrun lab-schedule-report-1 -n sympozium-system -o jsonpath='{.status.result}'
 # pause further firing:
