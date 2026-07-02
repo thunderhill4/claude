@@ -1,0 +1,38 @@
+# Two-persona pipeline: a stimulus node injects the initial prompt into
+# "analyst", whose output flows sequentially into "reviewer".
+apiVersion: sympozium.ai/v1alpha1
+kind: Ensemble
+metadata:
+  name: lab-ensemble-review
+  namespace: sympozium-system
+spec:
+  enabled: true
+  workflowType: pipeline
+  baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  agentConfigs:
+    - name: analyst
+      model: qwen2.5:7b
+      provider: ollama
+      systemPrompt: |
+        You analyze Kubernetes platform designs. Be specific and concise.
+    - name: reviewer
+      model: llama3.2
+      provider: ollama
+      systemPrompt: |
+        You review another agent's analysis: verify claims, flag anything
+        unsupported, and produce the final improved answer.
+  relationships:
+    - type: stimulus
+      source: kickoff
+      target: analyst
+    - type: sequential
+      source: analyst
+      target: reviewer
+  stimulus:
+    name: kickoff
+    prompt: |
+      What are the tradeoffs of running k3s clusters as KubeVirt VMs vs bare
+      Kind clusters?
