@@ -1,0 +1,34 @@
+# A served instance (web-endpoint) wired to the lab MCP server via
+# spec.mcpServers. AgentRun has no mcpServers field of its own (confirmed in
+# this lab series) — MCP tools only reach an agent through a served
+# instance's mcp-bridge sidecar, so this lab tests via chat completions
+# (lab 01 style), not a bare AgentRun.
+#
+# Needs BOTH an Agent CR (agent.yaml) and this SympoziumInstance, same name —
+# see lab 03's README for why (0.10's Agent/SympoziumInstance split).
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumInstance
+metadata:
+  name: lab-agent-mcp
+  namespace: sympozium-system
+spec:
+  agents:
+    default:
+      model: qwen2.5:7b
+      baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+      sandbox:
+        enabled: false
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  mcpServers:
+    - name: metallb-info
+      url: http://lab-mcp-metallb.sympozium-system.svc.cluster.local:8000/mcp
+      toolsPrefix: lab_
+  skills:
+    - skillPackRef: web-endpoint
+  policyRef: sandbox-restricted
+  memory:
+    enabled: false
+  observability:
+    enabled: false

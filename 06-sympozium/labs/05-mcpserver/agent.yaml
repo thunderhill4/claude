@@ -1,0 +1,39 @@
+# Companion Agent CR for lab-agent-mcp.
+#
+# MAJOR REVISION (see README "Observed behavior" #3): SympoziumInstance has
+# NO controller reconciling it at all on this installed version (confirmed:
+# `kubectl logs sympozium-controller-manager | grep -oE 'controllers\.[A-Za-z]+'`
+# lists Agent, AgentRun, Ensemble, MCPServer, SkillPack, SympoziumPolicy,
+# SympoziumSchedule — no SympoziumInstance). The `Agent` CRD is the one that's
+# actually reconciled, and its schema ALSO has skills/mcpServers/webEndpoint
+# (webEndpoint is marked "Deprecated: use the web-endpoint SkillPack in
+# Skills instead" — confirming skills is the right mechanism here too).
+# So: put mcpServers and skills directly on the Agent CR, not a separate
+# SympoziumInstance (lab-agent.yaml is kept only to show the schema that
+# doesn't actually do anything here).
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: lab-agent-mcp
+  namespace: sympozium-system
+spec:
+  agents:
+    default:
+      model: qwen2.5:7b
+      baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+      sandbox:
+        enabled: false
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  mcpServers:
+    - name: metallb-info
+      url: http://lab-mcp-metallb.sympozium-system.svc.cluster.local:8000/mcp
+      toolsPrefix: lab_
+  skills:
+    - skillPackRef: web-endpoint
+  policyRef: sandbox-restricted
+  memory:
+    enabled: false
+  observability:
+    enabled: false
