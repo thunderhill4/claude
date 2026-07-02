@@ -1,0 +1,43 @@
+# Capstone: composes what labs 02+04 proved actually works on this platform —
+# a hand-written AgentRun with an explicit skills sidecar (k8s-ops), against
+# the existing cluster2-agent (Agent CR + sandbox-restricted policy, no new
+# resources needed), producing a real multi-part platform status report.
+#
+# This deliberately does NOT use a SympoziumSchedule (lab 03 found schedules
+# never propagate skills to their child AgentRuns — a scheduled version of
+# this task would silently lose kubectl access) or an MCPServer tool (lab 05
+# found mcp-bridge times out talking to a real FastMCP server on this
+# version) — see those labs' READMEs for the evidence. The workaround this
+# lab demonstrates for "I want this periodic": an external cron (cron(1),
+# a CI schedule, a Kubernetes CronJob) running `kubectl apply -f` against a
+# fresh copy of this same file, sessionKey/name templated to be unique per
+# run.
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: lab-capstone-report
+  namespace: sympozium-system
+spec:
+  agentRef: cluster2-agent
+  agentId: primary
+  sessionKey: lab-capstone-report-1
+  mode: task
+  cleanup: keep
+  model:
+    provider: ollama
+    model: qwen2.5:7b
+    baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+    authSecretRef: llm-credentials
+  skills:
+    - skillPackRef: k8s-ops
+  task: |
+    Produce a platform status report with exactly these sections, using
+    kubectl (read-only — do not change anything):
+    1. Nodes: readiness of every node (kubectl get nodes -o wide).
+    2. VirtualMachines: every KubeVirt VM's namespace, name, and status
+       (kubectl get vm --all-namespaces).
+    3. Unhealthy pods: any pod outside kube-system with restarts greater
+       than 0 (kubectl get pods --all-namespaces --field-selector
+       status.phase!=Running,status.phase!=Succeeded, plus a restart-count
+       scan).
+    4. One-line overall verdict.

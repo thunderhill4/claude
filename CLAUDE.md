@@ -229,8 +229,10 @@ The backend keeps one `target-cluster` pre-built and labeled `pool.local/state=W
 (relabel `CLAIMED`, synthetic SSE) in seconds instead of building (~50s). Delete tears
 down and the controller rebuilds a standby in the background. Invariant: at most one
 `target-cluster` at a time. Endpoint: `GET /api/v1/cluster/pool-status`
-→ `{state: none|building|warm|claimed, clusterReady, lastError}`. Disable with
-`POOL_ENABLED=false`. Standby builds via `target-cluster-parallel.yaml` (`:latest`);
+→ `{state: none|building|warm|claimed, clusterReady, lastError}`. **Opt-in**:
+`run-ui.sh` defaults `POOL_ENABLED=false`; export `POOL_ENABLED=true` before
+running it to have the backend auto-build/rebuild a standby in the background.
+Standby builds via `target-cluster-parallel.yaml` (`:latest`);
 the on-demand fallback uses the warm image. Demo-only (fixed CA/token, single cluster).
 
 ## Infrastructure Conventions
@@ -277,4 +279,8 @@ The UI is deployed to the `kubeui` namespace on cluster2 (`ui/k8s/kubeui.yaml`):
 - The `CLAUDE_DIR` env var is passed to the backend so it can find repo scripts (e.g., for `kubectl apply`)
 - `target-cluster-kubeconfig` is a plain file in the repo root — used by `make istio` and verification scripts
 - If Sympozium serving Services aren't reachable, run `make sympozium-lb` to (re)patch them to LoadBalancer
+- Sympozium's `web-proxy` image crashes forever under `readOnlyRootFilesystem: true` (exit 2, zero log output, every ~30s) — the CRD has no securityContext override, so `install-sympozium.sh`/`demo-sympozium.sh` patch each `<instance>-web-endpoint-server` Deployment via `06-sympozium/fix-web-proxy-rootfs.sh` after applying. If a `SympoziumInstance` you add manually shows `0/1` endpoints and endless restarts, run that script against its Deployment.
+- The `sympozium-node-probe` DaemonSet (hostNetwork) checks `127.0.0.1:11434` to detect a local Ollama and populate `sympozium.ai/inference-*` node annotations (drives the Sympozium dashboard's Gateway/hardware view) — same host-vs-in-cluster reachability gap as the agent traffic path (see AI Integration section). Fix = an iptables OUTPUT DNAT rule (`127.0.0.1:11434` → `172.18.0.1:11434`) in the Kind node's netns, applied two ways: `06-sympozium/fix-node-probe-loopback.sh` (`make sympozium-fix-node-probe`, instant one-shot via `docker exec`) and `06-sympozium/node-probe-loopback-ds.yaml` (in the kustomize bundle; privileged hostPID DaemonSet that re-asserts the rule every 60s via `nsenter`, so it survives node-container/host restarts — the one-shot alone was lost on reboot and silently blanked the Gateway panel again).
+- The `sympozium-llmfit-daemon` (hardware view / model-fit in the Sympozium dashboard) detects NVIDIA GPUs by shelling out to `nvidia-smi`, which doesn't exist in its container (and couldn't run: no NVML lib, no `/dev/nvidia*` in the pod) — so the NVIDIA entry gets `vram=null` and the AMD iGPU (read from sysfs `mem_info_vram_total`, ~0.5Gi carve-out) is reported as the primary GPU instead. `install-sympozium.sh` runs `06-sympozium/fix-llmfit-nvidia-smi.sh` (`make sympozium-fix-llmfit-gpu`): it captures real answers from the host's `nvidia-smi`, writes a replay shim into the Kind node at `/opt/llmfit-shim/`, and mounts it into the daemon at `/usr/local/sbin` (NOT `/usr/local/bin` — that holds the `llmfit` binary). Shim values are static; re-run after node recreation or GPU/driver changes.
 - `make pre-pull` dramatically speeds up VM provisioning by pre-loading the container disk on Kind nodes
+- `06-sympozium/labs/` — hands-on labs for each Sympozium capability (serving API, AgentRun, schedules, policies, MCP tools, ensembles, model fit); see `labs/README.md`. **Load-bearing finding from these labs:** `SympoziumInstance` has no controller reconciling it on this installed version (0.10.38) — only the separate `Agent` CRD is. `cluster2-agent`/`target-cluster-agent` work because they have both objects sharing a name; any new agent needs an `Agent` CR (not just a `SympoziumInstance`) or `AgentRun`/`SympoziumSchedule` reference to it fails admission. This affects how "Architecture Constraints" rule #4/#7 in `Sovereign_Cloud_Agentic_Strategy.md` (which assume `SympoziumInstance.spec.policyRef` binds policy) actually get satisfied in practice — `policyRef` must live on the `Agent` object to take effect.
