@@ -1,0 +1,26 @@
+# Periodic agent work via SympoziumSchedule. Unlike lab 02's AgentRun, the
+# schedule controller creates each child AgentRun itself (from agentRef), so
+# it correctly inherits the instance's skills/sidecars — no spec.skills gap
+# like a hand-crafted AgentRun has (see lab 02's README).
+#
+# agentRef points at lab-agent-report (instance.yaml), NOT cluster2-agent —
+# see README for why type: scheduled never fires against a "serving"
+# instance (one with the web-endpoint skill).
+#
+# 2-minute cadence so this lab doesn't take long to verify; for real use,
+# something like "0 8 * * *" (daily) is more typical for a status report.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumSchedule
+metadata:
+  name: lab-schedule-report
+  namespace: sympozium-system
+spec:
+  agentRef: lab-agent-report
+  schedule: "*/2 * * * *"
+  type: scheduled
+  concurrencyPolicy: Forbid
+  includeMemory: false
+  task: |
+    Produce a concise cluster status report: node readiness, VirtualMachine
+    phases (use kubectl get vm --all-namespaces), and any pods with restarts
+    greater than 0. Read-only.

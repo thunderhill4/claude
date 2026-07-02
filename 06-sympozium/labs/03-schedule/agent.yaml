@@ -1,0 +1,34 @@
+# Sympozium 0.10 split the old single "instance" concept into two CRDs that
+# share a name and must both exist: SympoziumInstance (skills/webEndpoint/
+# serving deployment shape — instance.yaml) and Agent (the schedulable
+# identity that AgentRun/SympoziumSchedule's admission webhook requires to
+# exist before it will let a run reference that name — this file). cluster2-
+# agent and target-cluster-agent already have both (created during the 0.9→
+# 0.10 migration); any NEW instance you add needs an Agent CR too, or every
+# AgentRun/Schedule against it is rejected with:
+#   "admission webhook \"vagentpod.sympozium.ai\" denied the request:
+#    failed to find Agent <name>: Agent.sympozium.ai \"<name>\" not found"
+#
+# NOTE: `kubectl get agent` (singular, unqualified) resolves to the leftover
+# kagent.dev CRD from the pre-Sympozium install, NOT this one — always use
+# `kubectl get agents.sympozium.ai` to avoid the collision.
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: lab-agent-report
+  namespace: sympozium-system
+spec:
+  agents:
+    default:
+      model: qwen2.5:7b
+      baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+      sandbox:
+        enabled: false
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  policyRef: sandbox-restricted
+  memory:
+    enabled: false
+  observability:
+    enabled: false

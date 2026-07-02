@@ -1,0 +1,28 @@
+# A dedicated, non-serving instance for lab 03. SympoziumSchedule's
+# type: scheduled needs an instance that ISN'T already "serving" a permanent
+# AgentRun — cluster2-agent has the web-endpoint skill, which keeps a
+# long-running serving AgentRun alive forever, so the schedule controller
+# skips every trigger against it (see lab 03 README). A batch/report agent
+# with no web-endpoint skill has no serving run, so its schedule fires.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumInstance
+metadata:
+  name: lab-agent-report
+  namespace: sympozium-system
+spec:
+  agents:
+    default:
+      model: qwen2.5:7b
+      baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+      sandbox:
+        enabled: false
+  authRefs:
+    - provider: ollama
+      secret: llm-credentials
+  skills:
+    - skillPackRef: k8s-ops
+  policyRef: sandbox-restricted
+  memory:
+    enabled: false
+  observability:
+    enabled: false
