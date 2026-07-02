@@ -1,0 +1,39 @@
+# One-shot agent execution. Apply it, watch .status.phase, read the answer
+# from .status.result. Delete and re-apply to run again (AgentRuns are
+# single-use, like Jobs).
+#
+# Observed 0.10.38 requirements when creating an AgentRun directly (rather
+# than letting a schedule/web-endpoint/ensemble controller create one on your
+# behalf):
+#   1. agentRef alone is NOT enough to fill the run's spec — agentId, model
+#      (the full provider block), and sessionKey are also required. Copy the
+#      model block from the instance's agent config; agentId is "primary"
+#      (the runtime name of a SympoziumInstance's default agent entry).
+#   2. agentRef does NOT inherit the instance's skills/sidecars. Without an
+#      explicit spec.skills entry, the pod gets only the `agent` +
+#      `ipc-bridge` containers — no k8s-ops sidecar — so execute_command
+#      tool calls are written to the IPC channel and never answered. The
+#      model eventually gives up and reports a "skill sidecar" problem in
+#      its own final answer (see README "Observed behavior").
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: lab-agentrun-health
+  namespace: sympozium-system
+spec:
+  agentRef: cluster2-agent
+  agentId: primary
+  sessionKey: lab-agentrun-health-2        # any unique string; groups runs into a session
+  mode: task
+  cleanup: keep                            # keep the pod around for inspection; "delete" to GC
+  model:
+    provider: ollama
+    model: qwen2.5:7b
+    baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
+    authSecretRef: llm-credentials
+  skills:
+    - skillPackRef: k8s-ops
+  task: |
+    List this cluster's nodes and all KubeVirt VirtualMachines with their
+    status. Then give a one-paragraph health summary. Read-only: do not
+    change anything.
