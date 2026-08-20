@@ -1,4 +1,4 @@
-.PHONY: all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full target-cluster-parallel target-cluster-preinit target-cluster-lite-preinit target-cluster-full-preinit target-cluster-lite-minimal target-cluster-full-minimal verify clean ui ui-build registry bake-image bake-image-preinit bake-image-minimal-preinit build-containerdisk-preinit build-containerdisk-minimal-preinit demo help registry-fix pre-pull pre-pull-preinit pre-pull-minimal-preinit bake-image-warm build-containerdisk-warm pre-pull-warm ensure-warm-image target-cluster-warm time-to-ready time-to-ready-warm istio security-agent security-agent-build security-policies security-deploy sympozium-install sympozium-lb sympozium-pack-install sympozium-pack-uninstall sympozium-demo-agents sympozium-warm sympozium-demo sympozium-demo-clean
+.PHONY: all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full target-cluster-parallel target-cluster-preinit target-cluster-lite-preinit target-cluster-full-preinit target-cluster-lite-minimal target-cluster-full-minimal verify clean ui ui-build registry bake-image bake-image-preinit bake-image-minimal-preinit build-containerdisk-preinit build-containerdisk-minimal-preinit demo help registry-fix pre-pull pre-pull-preinit pre-pull-minimal-preinit bake-image-warm build-containerdisk-warm pre-pull-warm ensure-warm-image target-cluster-warm time-to-ready time-to-ready-warm istio security-agent security-agent-build security-policies security-deploy sympozium-install sympozium-lb sympozium-pack-install sympozium-pack-uninstall sympozium-demo-agents sympozium-warm sympozium-demo sympozium-demo-clean sympozium-fix-node-probe sympozium-fix-llmfit-gpu
 
 REGISTRY_URL := 172.18.0.2:5000
 CONTAINER_IMAGE := $(REGISTRY_URL)/ubuntu-noble-k3s:latest
@@ -61,6 +61,8 @@ help:
 	@echo "Sympozium (AI backend):"
 	@echo "  make sympozium-install     - Install cert-manager + Sympozium + agents on cluster2"
 	@echo "  make sympozium-lb          - Patch Sympozium serving Services to LoadBalancer via MetalLB"
+	@echo "  make sympozium-fix-node-probe - Re-apply node-probe loopback redirect (after cluster2-control-plane restarts)"
+	@echo "  make sympozium-fix-llmfit-gpu - Re-inject nvidia-smi shim into llmfit-daemon (fixes GPU shown as AMD)"
 	@echo "  make sympozium-pack-install   - Apply Phase-0 core bundle (policies + warm schedule + cluster2-agent)"
 	@echo "  make sympozium-pack-uninstall - Remove Phase-0 core bundle"
 	@echo "  make sympozium-demo-agents - Apply cost-analyzer + incident-responder + patch LBs"
@@ -114,7 +116,7 @@ verify:
 	bash 04-verify/verify-cluster.sh
 
 istio:
-	bash 05-istio/install-istio-ambient.sh /tmp/target-cluster-kubeconfig
+	bash 05-istio/install-istio-ambient.sh target-cluster-kubeconfig
 
 clean:
 	kubectl delete cluster target-cluster --ignore-not-found
@@ -286,8 +288,15 @@ sympozium-install: ## Install cert-manager + Sympozium + agents on cluster2
 sympozium-lb: ## Patch Sympozium serving Services to LoadBalancer via MetalLB
 	bash sympozium-lb-setup.sh
 
+sympozium-fix-node-probe: ## Re-apply the node-probe loopback redirect (e.g. after cluster2-control-plane restarts)
+	bash 06-sympozium/fix-node-probe-loopback.sh
+
+sympozium-fix-llmfit-gpu: ## Re-inject the nvidia-smi shim into llmfit-daemon (after node restarts or GPU/driver changes)
+	bash 06-sympozium/fix-llmfit-nvidia-smi.sh
+
 sympozium-demo-agents: ## Apply cost-analyzer + incident-responder CRs and patch LBs
 	kubectl apply -f 06-sympozium/cost-analyzer.yaml -f 06-sympozium/incident-responder.yaml
+	bash 06-sympozium/fix-web-proxy-rootfs.sh cost-analyzer-web-endpoint-server incident-responder-web-endpoint-server
 	bash sympozium-lb-setup.sh
 
 sympozium-pack-install: ## Apply Phase-0 core bundle (policies + warm schedule + cluster2-agent)

@@ -37,4 +37,17 @@ def metallb_table() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="http", host="0.0.0.0", port=8000)
+    # These three flags are the fix for Sympozium's mcp-bridge (a plain Go HTTP
+    # client) on FastMCP 3.4.3 — WITHOUT them the bridge's `initialize` times
+    # out "awaiting headers" and discovers 0 tools:
+    #   json_response=True         → reply with a single application/json body
+    #                                instead of FastMCP's default SSE
+    #                                (text/event-stream) framing, which the Go
+    #                                client can't consume.
+    #   stateless_http=True        → no per-session state / GET stream to set up.
+    #   host_origin_protection=False → FastMCP 3.4.3 rejects requests whose Host
+    #                                header isn't localhost with 421 Misdirected
+    #                                Request; in-cluster the Host is the Service
+    #                                DNS name, so the guard must be off.
+    mcp.run(transport="http", host="0.0.0.0", port=8000,
+            json_response=True, stateless_http=True, host_origin_protection=False)

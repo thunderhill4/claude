@@ -44,13 +44,22 @@ spec:
         endpoint (see the mounted kubeconfig).
 
 ---
+# NOTE: a SympoziumInstance companion object used to be kept here so kubeui's
+# agent dropdown could list it, but the `sympoziuminstances.sympozium.ai` CRD
+# is no longer shipped by the Sympozium chart (verified absent as of 0.10.38
+# through 0.10.47) — applying one now fails admission outright. See
+# cluster2-agent.yaml for the equivalent note and the dropdown fallback.
+#
+# Agent CR — the reconciled object on 0.10.38 (spec.skills=[web-endpoint]
+# drives declarative serving). Carries model, policy, and the environment
+# briefing. TOOL skills are omitted: the skills-webhook injects target-k8s-ops
+# per chat run (INJECT_SKILL_MAP), which mounts the target-cluster kubeconfig so
+# this agent's kubectl reaches INSIDE the target k3s cluster.
 apiVersion: sympozium.ai/v1alpha1
-kind: SympoziumInstance
+kind: Agent
 metadata:
   name: target-cluster-agent
   namespace: sympozium-system
-  annotations:
-    sympozium.ai/description: "Target-cluster workload agent (deployments, pods, services, Istio)"
 spec:
   agents:
     default:
@@ -62,10 +71,14 @@ spec:
     - provider: ollama
       secret: llm-credentials
   skills:
-    - skillPackRef: target-k8s-ops
-    - skillPackRef: web-endpoint
+    - skillPackRef: web-endpoint   # drives declarative serving (requiresServer=true)
   policyRef: target-reach
-  memory:
-    enabled: false
   observability:
     enabled: false
+  memory:
+    enabled: false
+    maxSizeKB: 256
+    # Environment briefing — keep SHORT (llama3.2). Edit here; re-run the installer.
+    systemPrompt: |
+      You are the workload operator for "target-cluster", a k3s cluster. Your kubectl talks DIRECTLY to the target cluster's own API via a mounted kubeconfig — you see ITS namespaces, deployments, pods, services, events, and Istio workloads. Use normal commands: kubectl get namespaces; kubectl get pods -A; kubectl get deploy,svc -A.
+      Context: target-cluster's nodes are KubeVirt VMs hosted on a separate "cluster2" management cluster (which runs CAPI, KubeVirt, MetalLB, Sympozium). You do NOT operate cluster2 or the VMs themselves — you only see inside the target cluster. cluster1 is another separate cluster you cannot reach. Read-only unless the user explicitly approves a change.

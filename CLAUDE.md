@@ -130,7 +130,7 @@ make registry     # inspect images in local registry at 172.18.0.2:5000
 ### Frontend (`ui/frontend/`)
 
 - **React 19** + **TypeScript** + **Vite** + **Tailwind CSS v4**
-- Dependencies: `lucide-react`, `radix-ui`, `react-markdown` + `remark-gfm`, `react-router-dom v7`
+- Dependencies: `lucide-react`, `radix-ui`, `react-markdown` + `remark-gfm`, `react-router-dom v7`, `@xterm/xterm` + `@xterm/addon-fit` (web terminal)
 - Path alias: `@/` → `ui/frontend/src/`
 
 **Three operational modes** (toggled via header; state in `useMode` hook):
@@ -147,7 +147,7 @@ make registry     # inspect images in local registry at 172.18.0.2:5000
 
 **Page components (`src/pages/`):**
 - `SREDashboard.tsx` — Routes to SRE sub-views based on `activePath`
-- `AIChat.tsx` — Chat UI consuming the SSE chat stream
+- `AIChat.tsx` — Renders `AgentConsole` (`src/components/ai/AgentConsole.tsx`): full-page iframe of the de-branded agent console at `<same-hostname>:8081` (the backend's console proxy — vendor top bar hidden, login/namespace pre-seeded; all dashboard side panes work)
 - `VisualDashboard.tsx` — Routes to visual sub-views based on `visualPath`
 
 **SRE components (`src/components/sre/`):**
@@ -155,6 +155,7 @@ make registry     # inspect images in local registry at 172.18.0.2:5000
 - `EventList.tsx`, `NamespaceSelector.tsx`, `ImageRepo.tsx`, `Registry.tsx`
 - `ClusterManager.tsx` — Target cluster deploy/delete with streaming log display
 - `ResourceTable.tsx` — Reusable table component
+- `TerminalView.tsx` — Multi-tab web terminal (xterm.js ↔ `/api/v1/terminal` WebSocket PTY); tabs and sessions persist across SRE sub-view switches (kept mounted in `SREDashboard.tsx`), but not across mode switches
 
 **Visual components (`src/components/visual/`):**
 - `TopologyView.tsx`, `TrafficManagement.tsx`, `ServiceManagement.tsx`
@@ -163,9 +164,9 @@ make registry     # inspect images in local registry at 172.18.0.2:5000
 
 ### Backend (`ui/backend/`)
 
-- **Go** with standard library only (`net/http`), no framework
-- Module: `kubeui/backend` (Go 1.25)
-- Kubernetes client: `k8s.io/client-go` v0.35.1
+- **Go** with standard library `net/http` (no framework); non-stdlib deps: `k8s.io/client-go`, `gorilla/websocket` + `creack/pty` (web terminal)
+- Module: `kubeui/backend` (Go 1.26)
+- Kubernetes client: `k8s.io/client-go` v0.36.2
 
 **API routes (`main.go`):**
 
@@ -188,14 +189,17 @@ make registry     # inspect images in local registry at 172.18.0.2:5000
 | GET | `/api/v1/events?namespace=` | Events |
 | GET | `/api/v1/virtualmachines?namespace=` | All VMs |
 | GET | `/api/v1/virtualmachines/{ns}/{name}` | Single VM |
+| GET | `/api/v1/terminal` | Web terminal (WebSocket → PTY shell; one shell per connection/tab) |
 | POST | `/api/ai/chat` | Proxy to Sympozium agent (SSE stream, OpenAI-compat) |
 | GET | `/api/ai/agents` | List available Sympozium agents (SympoziumInstance CRs) |
+| ANY | `:8081/*` (separate port) | De-branding reverse proxy to the Sympozium dashboard (`handlers/dashboard_proxy.go`): hides the vendor top bar via injected CSS, pre-seeds `sympozium_token`/`sympozium_namespace` in localStorage; separate port because the SPA's absolute `/assets` + `/api/v1` paths would collide with kubeui's routes |
 | GET | `/healthz` | Health check |
 
 **CORS:** Allows `localhost:5173`, `127.0.0.1:5173`, `172.18.255.211`
 
 **Handler files:**
 - `handlers/ai.go` — OpenAI-compatible chat-completions proxy to Sympozium; SSE streaming
+- `handlers/dashboard_proxy.go` — Console proxy on `:8081` (AI tab embed); upstream from `SYMPOZIUM_DASHBOARD_URL`, port from `SYMPOZIUM_CONSOLE_PORT`
 - `handlers/cluster_deploy.go` — CAPI cluster lifecycle; streaming log manager
 - `handlers/resources.go` — Nodes, pods, VMs, events, namespaces
 - `handlers/cdi.go` — CDI DataVolume listing
@@ -219,6 +223,7 @@ SYMPOZIUM_DEFAULT_AGENT=cluster2-agent
 SYMPOZIUM_AGENT_URL=http://172.18.255.213:8080/
 SYMPOZIUM_AGENT_URL_TARGET_CLUSTER_AGENT=http://172.18.255.214:8080/
 SYMPOZIUM_API_TOKEN=<token from sympozium-ui-token Secret>
+SYMPOZIUM_DASHBOARD_URL=http://172.18.255.212:8080   # console-proxy upstream (server-side; in prod the in-cluster svc DNS)
 CLAUDE_DIR=<repo root>
 ```
 
@@ -279,8 +284,13 @@ The UI is deployed to the `kubeui` namespace on cluster2 (`ui/k8s/kubeui.yaml`):
 - The `CLAUDE_DIR` env var is passed to the backend so it can find repo scripts (e.g., for `kubectl apply`)
 - `target-cluster-kubeconfig` is a plain file in the repo root — used by `make istio` and verification scripts
 - If Sympozium serving Services aren't reachable, run `make sympozium-lb` to (re)patch them to LoadBalancer
+- `target-cluster-agent`'s tools reach the target cluster via the `sympozium-system/target-cluster-kubeconfig` Secret (mounted by the `target-k8s-ops` SkillPack). The target CA changes on every redeploy, so a stale Secret makes the agent's `kubectl` fail TLS (`x509: unknown authority`) **silently** — llama3.2 then confabulates plausible namespace output. `06-sympozium/refresh-target-kubeconfig.sh` re-syncs it and is auto-invoked by `04-verify/verify-cluster.sh` (`make verify`), the UI deploy (`cluster_deploy.go`), and the warm-pool claim (`pool.go`). Detect staleness by comparing the CA sha of the Secret vs `target-cluster-kubeconfig`; verify reach **deterministically** (never trust the model) with a pod in `sympozium-system` mounting the Secret and running `KUBECONFIG=/etc/target-kube/kubeconfig kubectl get ns`.
 - Sympozium's `web-proxy` image crashes forever under `readOnlyRootFilesystem: true` (exit 2, zero log output, every ~30s) — the CRD has no securityContext override, so `install-sympozium.sh`/`demo-sympozium.sh` patch each `<instance>-web-endpoint-server` Deployment via `06-sympozium/fix-web-proxy-rootfs.sh` after applying. If a `SympoziumInstance` you add manually shows `0/1` endpoints and endless restarts, run that script against its Deployment.
 - The `sympozium-node-probe` DaemonSet (hostNetwork) checks `127.0.0.1:11434` to detect a local Ollama and populate `sympozium.ai/inference-*` node annotations (drives the Sympozium dashboard's Gateway/hardware view) — same host-vs-in-cluster reachability gap as the agent traffic path (see AI Integration section). Fix = an iptables OUTPUT DNAT rule (`127.0.0.1:11434` → `172.18.0.1:11434`) in the Kind node's netns, applied two ways: `06-sympozium/fix-node-probe-loopback.sh` (`make sympozium-fix-node-probe`, instant one-shot via `docker exec`) and `06-sympozium/node-probe-loopback-ds.yaml` (in the kustomize bundle; privileged hostPID DaemonSet that re-asserts the rule every 60s via `nsenter`, so it survives node-container/host restarts — the one-shot alone was lost on reboot and silently blanked the Gateway panel again).
 - The `sympozium-llmfit-daemon` (hardware view / model-fit in the Sympozium dashboard) detects NVIDIA GPUs by shelling out to `nvidia-smi`, which doesn't exist in its container (and couldn't run: no NVML lib, no `/dev/nvidia*` in the pod) — so the NVIDIA entry gets `vram=null` and the AMD iGPU (read from sysfs `mem_info_vram_total`, ~0.5Gi carve-out) is reported as the primary GPU instead. `install-sympozium.sh` runs `06-sympozium/fix-llmfit-nvidia-smi.sh` (`make sympozium-fix-llmfit-gpu`): it captures real answers from the host's `nvidia-smi`, writes a replay shim into the Kind node at `/opt/llmfit-shim/`, and mounts it into the daemon at `/usr/local/sbin` (NOT `/usr/local/bin` — that holds the `llmfit` binary). Shim values are static; re-run after node recreation or GPU/driver changes.
+- The Sympozium dashboard (172.18.255.212:8080) shows **no agents/runs/schedules/ensembles** until you switch its namespace picker (header dropdown) to `sympozium-system` — the frontend appends `?namespace=<localStorage sympozium_namespace>` to every API list call and defaults to `default`, where nothing lives. The choice persists in localStorage per browser; there is no server-side default-namespace knob (verified against the v0.10.38 apiserver binary). Console shortcut: `localStorage.setItem('sympozium_namespace','sympozium-system'); location.reload()`.
 - `make pre-pull` dramatically speeds up VM provisioning by pre-loading the container disk on Kind nodes
-- `06-sympozium/labs/` — hands-on labs for each Sympozium capability (serving API, AgentRun, schedules, policies, MCP tools, ensembles, model fit); see `labs/README.md`. **Load-bearing finding from these labs:** `SympoziumInstance` has no controller reconciling it on this installed version (0.10.38) — only the separate `Agent` CRD is. `cluster2-agent`/`target-cluster-agent` work because they have both objects sharing a name; any new agent needs an `Agent` CR (not just a `SympoziumInstance`) or `AgentRun`/`SympoziumSchedule` reference to it fails admission. This affects how "Architecture Constraints" rule #4/#7 in `Sovereign_Cloud_Agentic_Strategy.md` (which assume `SympoziumInstance.spec.policyRef` binds policy) actually get satisfied in practice — `policyRef` must live on the `Agent` object to take effect.
+- `06-sympozium/labs/` — hands-on labs for each Sympozium capability (serving API, AgentRun, schedules, policies, MCP tools, ensembles, model fit); see `labs/README.md`. **Load-bearing finding from these labs:** `SympoziumInstance` has no controller reconciling it on this installed version (0.10.38) — only the separate `Agent` CRD is. `cluster2-agent`/`target-cluster-agent` work because they have both objects sharing a name; any new agent needs an `Agent` CR (not just a `SympoziumInstance`) or `AgentRun`/`SympoziumSchedule` reference to it fails admission. This affects how "Architecture Constraints" rule #4/#7 in `Sovereign_Cloud_Agentic_Strategy.md` (which assume `SympoziumInstance.spec.policyRef` binds policy) actually get satisfied in practice — `policyRef` must live on the `Agent` object to take effect. **Both agents are now committed as `Agent` CRs** (in `06-sympozium/{cluster2-agent,target-cluster-agent}.yaml`, alongside the kept `SympoziumInstance` which kubeui's dropdown lists), carrying model, `policyRef`, the environment briefing (`spec.memory.systemPrompt`), and `skills: [web-endpoint]`. **Declarative serving:** `web-endpoint` SkillPack has `sidecar.requiresServer: true`, so listing it in the Agent's `spec.skills` makes the AgentRun controller create the `mode: server` run + `<name>-web-endpoint-server` Deployment — no SympoziumInstance needed (on the migrated cluster a legacy Instance-owned serving run of the same name exists; the controller respects it, no duplicate). So `make sympozium-install` on a clean cluster now stands up briefed, serving agents unaided.
+- **Chat/dashboard AgentRuns get no skill sidecar, so tool calls silently go nowhere** ("It seems there might be an issue with the skill sidecar..." is the model giving up, not a real sidecar crash). Root cause: `POST /api/v1/runs` (what the dashboard chat and kubeui's `/api/ai/chat` proxy both create runs through) never sets `spec.skills` — nothing in 0.10.38 propagates an agent's tools into runs spawned on its behalf. A run without `spec.skills` gets only the `agent` + `ipc-bridge` containers, no `k8s-ops` sidecar to execute `kubectl`/`virtctl`. Fixed by `06-sympozium/skills-webhook/`: a mutating admission webhook (`MutatingWebhookConfiguration agentrun-skills-injector`, `failurePolicy: Ignore`) that patches `spec.skills` onto CREATEd AgentRuns when `spec.mode == "task"` and `spec.skills` is empty, choosing the SkillPack **per agent** via `INJECT_SKILL_MAP` (default `cluster2-agent=k8s-ops,target-cluster-agent=target-k8s-ops`). `cluster2-agent` gets `k8s-ops` (in-cluster SA → cluster2 API); `target-cluster-agent` gets `target-k8s-ops` (mounts the `target-cluster-kubeconfig` Secret → reaches *inside* the target k3s cluster at `172.18.255.215:6443`). Deploy: `06-sympozium/skills-webhook/build-and-deploy.sh` (builds the Go binary + image, `kind load docker-image` into cluster2, applies `deploy.yaml`; TLS via a self-signed cert-manager `Issuer`+`Certificate`, CA auto-injected via `cert-manager.io/inject-ca-from`). Verified: a `curl POST /api/v1/runs` with no `skills` field came back with real `kubectl get nodes` output instead of the sidecar-error text. Separately, weaker local models (llama3.2) can still emit a malformed tool call as raw text even with the sidecar present — that's the existing 7B tool-calling limitation, not this bug.
+- **STALE as of a from-scratch rebuild against the currently-published chart**: `sympoziuminstances.sympozium.ai` is no longer shipped as a CRD at all (verified absent on chart versions 0.10.38 through 0.10.47 pulled fresh from `https://deploy.sympozium.ai/charts`) — applying one now fails admission outright (`no matches for kind "SympoziumInstance"`). The `SympoziumInstance` documents in `cluster2-agent.yaml`/`target-cluster-agent.yaml` referenced above have been removed; only the `Agent` CRs remain. kubeui's agent dropdown (`ui/backend/handlers/ai.go` `HandleListAgents`) still queries the (now-nonexistent) CRD, gets an error, and falls back to listing just `SYMPOZIUM_DEFAULT_AGENT` — functional but no longer auto-discovers other agents. `install-sympozium.sh` pins `--version 0.10.38` (`SYMPOZIUM_CHART_VERSION`) since that's the version everything else in this doc was verified against; going to `latest` is otherwise fine (KubeVirt/CDI/CAPI were all bumped to current-latest in the same rebuild with no issues) but chart upgrades should be re-verified against this file before trusting it blind.
+- **`helm install sympozium` silently drops some of the chart's built-in `SkillPack` resources** (kind: SkillPack, labeled `sympozium.ai/builtin: "true"` — observed: `web-endpoint`, `k8s-ops`, `code-review`, `incident-response`, `llmfit`, `memory`, `sre-observability`, `subagents`) even on a clean install with `--wait` reporting success and `helm get manifest` showing them as part of the release. Other kinds in the same chart (`SympoziumPolicy`, etc.) were not observed to be affected. Symptom: an `Agent` with `skills: [{skillPackRef: web-endpoint}]` gets an `AgentRun` stuck `Failed` with `"no sidecar with requiresServer=true found"` — no `<name>-web-endpoint-server` Deployment ever appears, so `sympozium-lb-setup.sh` has nothing to expose and the AI tab has no serving endpoint to call. Fixed by `06-sympozium/fix-missing-builtin-skillpacks.sh` (auto-run by `install-sympozium.sh` as step `2a/5`): diffs `helm get manifest`'s builtin-labeled SkillPacks against what's actually in-cluster and re-applies whatever is missing; idempotent. After it runs, delete any AgentRuns stuck `Failed` from before the SkillPack existed (`kubectl delete agentrun <name>-web-endpoint -n sympozium-system`) so the controller recreates them — it does not retry a terminal `Failed` run on its own.

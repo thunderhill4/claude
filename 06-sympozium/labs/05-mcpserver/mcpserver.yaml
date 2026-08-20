@@ -38,7 +38,7 @@ data:
         return "\n".join(f"{ip}  {svc}" for ip, svc in ASSIGNMENTS.items())
 
     if __name__ == "__main__":
-        mcp.run(transport="http", host="0.0.0.0", port=8000)
+        mcp.run(transport="http", host="0.0.0.0", port=8000, json_response=True, stateless_http=True, host_origin_protection=False)
 ---
 apiVersion: sympozium.ai/v1alpha1
 kind: MCPServer

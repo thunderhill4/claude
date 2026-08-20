@@ -26,6 +26,13 @@ echo "==> Retrieving target cluster kubeconfig..."
 if clusterctl get kubeconfig "${CLUSTER_NAME}" > "${KUBECONFIG_FILE}" 2>/dev/null; then
   echo "    Kubeconfig saved to: ${KUBECONFIG_FILE}"
 
+  # Keep the in-cluster Secret target-cluster-agent uses in sync with this
+  # freshly generated kubeconfig (the target CA changes on every redeploy).
+  # No-op if Sympozium isn't installed yet.
+  if [ "${CLUSTER_NAME}" = "target-cluster" ]; then
+    bash "${SCRIPT_DIR}/../06-sympozium/refresh-target-kubeconfig.sh" "${KUBECONFIG_FILE}" || true
+  fi
+
   echo ""
   echo "==> Target cluster nodes:"
   kubectl --kubeconfig="${KUBECONFIG_FILE}" get nodes -o wide 2>/dev/null || \

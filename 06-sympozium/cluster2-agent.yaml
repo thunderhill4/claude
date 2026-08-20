@@ -1,14 +1,36 @@
-# cluster2-agent — SympoziumInstance that analyzes cluster2 itself
+# cluster2-agent — Agent that analyzes cluster2 itself
 # (KubeVirt VMs, CDI DataVolumes, CAPI Clusters, Kind nodes).
 #
 # RBAC and kubectl are provided by the built-in `k8s-ops` SkillPack's sidecar;
 # no ServiceAccount needs to be defined here.
 # The built-in `web-endpoint` SkillPack exposes this agent as an OpenAI-compatible
 # HTTP endpoint on port 8080.
-
+#
+# NOTE: a SympoziumInstance companion object used to be kept here so kubeui's
+# agent dropdown could list it, but the `sympoziuminstances.sympozium.ai` CRD
+# is no longer shipped by the Sympozium chart (verified absent as of 0.10.38
+# through 0.10.47) — applying one now fails admission outright. The dropdown
+# falls back to SYMPOZIUM_DEFAULT_AGENT when the SympoziumInstance list call
+# errors (see ui/backend/handlers/ai.go HandleListAgents), so this is safe to
+# drop.
 ---
+# The Agent CR is the object the Sympozium controller actually reconciles on
+# 0.10.38. Model, policy, the persistent environment briefing
+# (spec.memory.systemPrompt, injected into every run), and the web-endpoint
+# skill (which drives serving) must live here to take effect on 0.10.38.
+#
+# spec.skills = [web-endpoint] is what makes serving declarative: the AgentRun
+# controller sees the web-endpoint SkillPack's sidecar.requiresServer=true and
+# creates a mode=server AgentRun (`<name>-web-endpoint`) → a long-running
+# `<name>-web-endpoint-server` Deployment. No SympoziumInstance needed (on the
+# already-migrated cluster a legacy Instance-owned serving run of the same name
+# exists; the controller respects it and does not duplicate). TOOL skills
+# (k8s-ops / target-k8s-ops) are intentionally NOT listed here — chat runs
+# created via POST /api/v1/runs don't inherit an agent's skills on this version,
+# so the skills-webhook (06-sympozium/skills-webhook/) injects the right tool
+# SkillPack per run instead.
 apiVersion: sympozium.ai/v1alpha1
-kind: SympoziumInstance
+kind: Agent
 metadata:
   name: cluster2-agent
   namespace: sympozium-system
@@ -18,22 +40,25 @@ spec:
   agents:
     default:
       model: qwen2.5:7b
-      # In-cluster shim Service (Endpoints → 172.18.0.1:11434) — AgentRun pods
-      # can't reach the docker-bridge gateway directly; Service IPs work.
       baseURL: http://host-ollama.sympozium-system.svc.cluster.local:11434/v1
       sandbox:
         enabled: false
-      # NOTE: 0.9.1 CRD does not support systemPrompt. Persona/behavior is
-      # injected by the kubeui backend as a system message on every chat
-      # (see ui/backend/handlers/ai.go).
   authRefs:
     - provider: ollama
       secret: llm-credentials
   skills:
-    - skillPackRef: k8s-ops
-    - skillPackRef: web-endpoint
+    - skillPackRef: web-endpoint   # drives declarative serving (requiresServer=true)
   policyRef: sandbox-restricted
-  memory:
-    enabled: false
   observability:
     enabled: false
+  memory:
+    enabled: false
+    maxSizeKB: 256
+    # Environment briefing — keep SHORT (7B model). Edit here; re-run the
+    # installer (or kubectl apply -k 06-sympozium/) to reproduce.
+    systemPrompt: |
+      You operate "cluster2", the management cluster of a KubeVirt multi-cluster platform. Topology:
+      - cluster2 (where your kubectl/virtctl run): a Kind cluster hosting Cluster API (CAPI), KubeVirt + CDI (VMs run as pods), MetalLB, and Sympozium. Your in-cluster tools talk to THIS cluster's API only.
+      - target-cluster: a k3s cluster whose nodes are KubeVirt VirtualMachines hosted on cluster2, provisioned by CAPI. Inspect from cluster2 with: kubectl get clusters,machines -A (group cluster.x-k8s.io); kubectl get virtualmachines,virtualmachineinstances -A (group kubevirt.io); kubectl get datavolumes -A (CDI). target-cluster API VIP is 172.18.255.215.
+      - cluster1: a SEPARATE Kind cluster (Istio ambient mesh, httpbin/sleep). You have NO kubectl access to it from here.
+      Always use full resource names (virtualmachines, virtualmachineinstances, clusters, machines). Read-only unless the user explicitly approves a change.

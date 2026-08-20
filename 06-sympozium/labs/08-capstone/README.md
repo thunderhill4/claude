@@ -81,6 +81,12 @@ Sympozium SkillPack doesn't).
 > AgentRun after the fix produced a real VM listing (both `target-cluster`
 > VMs, Running) instead of the permission error.
 
+> A post-fix re-run (2026-07-02) confirms it end-to-end in this capstone
+> too: the VirtualMachines section now lists both `target-cluster` VMs by
+> name in the `default` namespace instead of the permission error (though
+> the model omitted their status column despite the prompt asking for it —
+> small-model imprecision, not RBAC).
+
 **2. The report is genuinely incomplete, not truncated by us.** `qwen2.5:7b`
 used all 4 of its tool calls investigating nodes and the VM permission
 error, then ran out of budget and wrote the pods-check *command* into its
@@ -88,7 +94,10 @@ final answer instead of executing it and synthesizing a real answer. This
 is the same single-shot-model limitation lab 02 found — worth knowing before
 trusting a report-style AgentRun to be exhaustive on the first pass; asking
 more narrowly (one section per AgentRun) or raising expectations for
-multiple tool-call rounds in the prompt helps.
+multiple tool-call rounds in the prompt helps. The re-run reproduced this
+exactly (4 tool calls, ~42s, 7,821 tokens): nodes ✅, VMs ✅ (post-RBAC-fix),
+then the pods `kubectl ... | jq` command emitted as *text three times* with
+"Let me execute the command now" — and no verdict section at all.
 
 ## Where to go next
 

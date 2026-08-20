@@ -1,0 +1,61 @@
+# Self-healing loopback redirect for sympozium-node-probe.
+#
+# node-probe (hostNetwork) checks 127.0.0.1:11434 for a local Ollama, but
+# Ollama runs on the actual Docker host — unreachable via loopback from the
+# Kind node's netns. fix-node-probe-loopback.sh adds an iptables DNAT rule
+# for this, but that rule lives in the node container's netns and is lost
+# whenever the container restarts (e.g. host reboot), after which node-probe
+# strips the sympozium.ai/inference-* annotations and the dashboard's
+# Gateway panel goes blank again.
+#
+# This DaemonSet re-asserts the rule every 60s using the NODE's own iptables
+# binary via hostPID + nsenter (the pod image needs no iptables of its own),
+# so the fix reapplies itself after any node restart.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-probe-loopback-fix
+  labels:
+    app: node-probe-loopback-fix
+spec:
+  selector:
+    matchLabels:
+      app: node-probe-loopback-fix
+  template:
+    metadata:
+      labels:
+        app: node-probe-loopback-fix
+    spec:
+      hostPID: true
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: ensure-rule
+          image: docker.io/library/busybox:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+            - name: OLLAMA_PORT
+              value: "11434"
+            - name: DOCKER_BRIDGE_GATEWAY
+              value: "172.18.0.1"
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                if ! nsenter -t 1 -m -n -- iptables -t nat -C OUTPUT -o lo -p tcp \
+                    --dport "$OLLAMA_PORT" -j DNAT \
+                    --to-destination "$DOCKER_BRIDGE_GATEWAY:$OLLAMA_PORT" 2>/dev/null; then
+                  nsenter -t 1 -m -n -- iptables -t nat -A OUTPUT -o lo -p tcp \
+                    --dport "$OLLAMA_PORT" -j DNAT \
+                    --to-destination "$DOCKER_BRIDGE_GATEWAY:$OLLAMA_PORT" \
+                    && echo "applied DNAT 127.0.0.1:$OLLAMA_PORT -> $DOCKER_BRIDGE_GATEWAY:$OLLAMA_PORT"
+                fi
+                sleep 60
+              done
+          resources:
+            requests:
+              cpu: 5m
+              memory: 8Mi

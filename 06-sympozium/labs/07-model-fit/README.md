@@ -67,6 +67,14 @@ system RAM):
 - `min_fit=good` and `sort=score` work as documented filters; `total_models`
   in the response (74) tells you the size of the full candidate database
   being scored against, useful context for how exhaustive a search this is.
+  Note it's scoped to the query's filters (a re-run showed 82 for
+  `use_case=coding` vs 943 unfiltered) and grows over time as the daemon's
+  catalog updates (74 → 82 coding candidates between runs) — so scores and
+  rankings can shift between runs without any hardware change.
+- Quirk seen on the re-run: entries can carry `fit_label: "Good"` (fit
+  component 100.0) while their `notes` simultaneously say "Insufficient
+  VRAM and system RAM" (the Qwen2.5-Coder-7B AWQ/GPTQ entries). Read the
+  `notes` array, not just the label, before trusting a fit verdict.
 
 ## Acting on a recommendation
 

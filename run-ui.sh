@@ -10,6 +10,10 @@ SYMPOZIUM_DEFAULT_AGENT="${SYMPOZIUM_DEFAULT_AGENT:-cluster2-agent}"
 # MetalLB LoadBalancer IPs for Sympozium serving-mode Services (see sympozium-lb-setup.sh)
 SYMPOZIUM_AGENT_URL="${SYMPOZIUM_AGENT_URL:-http://172.18.255.213:8080/}"
 SYMPOZIUM_AGENT_URL_TARGET_CLUSTER_AGENT="${SYMPOZIUM_AGENT_URL_TARGET_CLUSTER_AGENT:-http://172.18.255.214:8080/}"
+# Upstream for the backend's de-branding console proxy (served on :8081,
+# embedded in the AI tab). Server-side only — needs to be reachable from the
+# backend process, not the browser.
+SYMPOZIUM_DASHBOARD_URL="${SYMPOZIUM_DASHBOARD_URL:-http://172.18.255.212:8080}"
 SYMPOZIUM_API_TOKEN="${SYMPOZIUM_API_TOKEN:-}"
 if [[ -z "$SYMPOZIUM_API_TOKEN" ]]; then
     SYMPOZIUM_API_TOKEN="$(kubectl --context kind-cluster2 get secret -n "$SYMPOZIUM_NAMESPACE" "${SYMPOZIUM_DEFAULT_AGENT}-web-proxy-key" -o jsonpath='{.data.api-key}' 2>/dev/null | base64 -d || true)"
@@ -23,9 +27,11 @@ fi
 SECURITY_AGENT_URL="${SECURITY_AGENT_URL:-http://localhost:8082}"
 
 # Warm pool config for target-cluster pre-deployment.
+# Opt-in: export POOL_ENABLED=true before running this script to have the
+# backend auto-build/rebuild a standby cluster in the background.
 # Standby sizing is controlled by POOL_STANDBY_MANIFEST (point it at a
 # lite/parallel variant for smaller standbys) — there is no separate profile knob.
-export POOL_ENABLED="${POOL_ENABLED:-true}"
+export POOL_ENABLED="${POOL_ENABLED:-false}"
 export POOL_STANDBY_MANIFEST="${POOL_STANDBY_MANIFEST:-03-target-cluster/target-cluster-parallel.yaml}"
 export POOL_POLL_SECONDS="${POOL_POLL_SECONDS:-5}"
 
@@ -44,6 +50,7 @@ SYMPOZIUM_DEFAULT_AGENT="$SYMPOZIUM_DEFAULT_AGENT" \
 SYMPOZIUM_AGENT_URL="$SYMPOZIUM_AGENT_URL" \
 SYMPOZIUM_AGENT_URL_TARGET_CLUSTER_AGENT="$SYMPOZIUM_AGENT_URL_TARGET_CLUSTER_AGENT" \
 SYMPOZIUM_API_TOKEN="$SYMPOZIUM_API_TOKEN" \
+SYMPOZIUM_DASHBOARD_URL="$SYMPOZIUM_DASHBOARD_URL" \
 SECURITY_AGENT_URL="$SECURITY_AGENT_URL" \
 CLAUDE_DIR="$SCRIPT_DIR" \
 go run . &
@@ -62,13 +69,15 @@ fi
 
 echo "Starting frontend on :5173..."
 cd "$UI_DIR/frontend"
-npm run dev &
+npm run dev -- --host 0.0.0.0 &
 FRONTEND_PID=$!
 
 echo ""
 echo "UI is running:"
 echo "  Frontend:              http://localhost:5173"
+echo "  Frontend (host):       http://192.168.1.14:5173"
 echo "  Backend:               http://localhost:8080"
+echo "  AI console proxy:      http://localhost:8081  (embedded in the AI tab)"
 echo "  Sympozium default:     ${SYMPOZIUM_AGENT_URL}  (${SYMPOZIUM_DEFAULT_AGENT})"
 echo "  Sympozium target:      ${SYMPOZIUM_AGENT_URL_TARGET_CLUSTER_AGENT}  (target-cluster-agent)"
 echo "  Security agent:        ${SECURITY_AGENT_URL}"

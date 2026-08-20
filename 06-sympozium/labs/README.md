@@ -7,6 +7,11 @@ cluster. Design: `docs/superpowers/specs/2026-07-02-sympozium-learning-labs-desi
 
 All lab resources live in `sympozium-system` and are named `lab-*`.
 
+> **Watching labs in the Sympozium dashboard** (`http://172.18.255.212:8080`):
+> switch the header's namespace picker to `sympozium-system` first — it
+> defaults to `default`, where nothing lives, so agents/runs/schedules/
+> ensembles all render empty. The choice is per-browser (localStorage).
+
 ## How the pieces fit (as actually observed, not just as documented)
 
 Every actual execution is an **AgentRun** — created by you (lab 02), by a
@@ -18,6 +23,13 @@ also with caveats). **MCPServer** CRs register external tool servers (lab
 other applications integrate against. **SkillPack**s bundle built-ins
 (`k8s-ops` = kubectl sidecar + RBAC, `web-endpoint` = the serving endpoint).
 The **llmfit** daemon (lab 07) scores models against the node's hardware.
+
+Labs 01–08 establish the *mechanics*; **labs 09–10 show the AI actually paying
+off**. Every AgentRun records real `tokenUsage` (tokens, tool calls, duration)
+— lab 09 aggregates that into a token/latency/throughput **model comparison**,
+and lab 10 puts an agent on a real **SRE triage** task and *scores* whether it
+reaches the right diagnosis and what that costs. Those two are where "is this
+actually useful, and how reliably?" gets answered with numbers.
 
 **The one correction that matters most:** `SympoziumInstance` — the CRD
 `06-sympozium/cluster2-agent.yaml` and friends use — **has no controller
@@ -40,10 +52,12 @@ lab 03's README for the full story and the `kubectl get agent` vs
 | 02 | [agentrun](02-agentrun/) | One-shot task via `AgentRun` CR | CR-driven pattern for GitOps/CI/operators | ✅ works (needs explicit `agentId`/`model`/`sessionKey`/`skills`) |
 | 03 | [schedule](03-schedule/) | `SympoziumSchedule` cron agent work | Autonomous periodic tasks | ⚠️ prompt-only tasks work; skill-using tasks don't (no skills propagation) |
 | 04 | [policy](04-policy/) | `SympoziumPolicy` tool gating / egress / sandbox | Guardrails to tune before giving agents to other teams | ⚠️ explicit override is blocked; default deny is NOT enforced; network policy is inert on this cluster's CNI |
-| 05 | [mcpserver](05-mcpserver/) | `MCPServer` + `mcpServers:` refs | How other applications expose tools to agents | ⚠️ wiring works end-to-end to a live sidecar + registered tool; the actual tool call times out talking to FastMCP |
+| 05 | [mcpserver](05-mcpserver/) | `MCPServer` + `mcpServers:` refs | How other applications expose tools to agents | ✅ discovery fixed (FastMCP `json_response`+no host-guard); tool visible/registered. ⚠️ runtime `tools/call` still model-flaky |
 | 06 | [ensemble](06-ensemble/) | Multi-agent `Ensemble` (pipeline) | Multi-agent workflows | ✅ works (`spec.enabled: true` required) |
 | 07 | [model-fit](07-model-fit/) | llmfit hardware/model-fit API | Hardware-aware model selection | ✅ works |
 | 08 | [capstone](08-capstone/) | `AgentRun` + `k8s-ops` skill under policy | Composes what's proven to work; documents what doesn't | ✅ works (partially — a real RBAC gap surfaces) |
+| 09 | [metrics](09-metrics/) | AgentRun `tokenUsage` metrics, aggregated | Tokens/tool-calls/latency you'd bill, autoscale & pick models on | ✅ works (real qwen2.5:7b vs llama3.2 comparison) |
+| 10 | [sre-triage](10-sre-triage/) | Scored real agent work (diagnose a broken workload) | Agent-as-junior-SRE: correctness + cost, measured | ✅ works (3/3 root-caused an ImagePullBackOff) |
 
 ## Conventions
 

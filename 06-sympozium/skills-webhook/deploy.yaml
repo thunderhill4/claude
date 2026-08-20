@@ -1,0 +1,108 @@
+# AgentRun skills injector — see main.go for the why.
+# TLS via cert-manager (installed by install-sympozium.sh); the CA is injected
+# into the webhook config by cainjector (cert-manager.io/inject-ca-from).
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: skills-webhook-selfsigned
+  namespace: sympozium-system
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: skills-webhook
+  namespace: sympozium-system
+spec:
+  secretName: skills-webhook-tls
+  dnsNames:
+    - skills-webhook.sympozium-system.svc
+  issuerRef:
+    name: skills-webhook-selfsigned
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: skills-webhook
+  namespace: sympozium-system
+  labels:
+    app: skills-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skills-webhook
+  template:
+    metadata:
+      labels:
+        app: skills-webhook
+    spec:
+      containers:
+        - name: webhook
+          image: skills-webhook:latest
+          imagePullPolicy: Never # loaded via `kind load docker-image`
+          env:
+            # agentRef=skillPackRef per agent. cluster2-agent → k8s-ops
+            # (in-cluster SA, cluster2 API); target-cluster-agent →
+            # target-k8s-ops (mounts target kubeconfig, reaches inside the
+            # target k3s cluster).
+            - name: INJECT_SKILL_MAP
+              value: "cluster2-agent=k8s-ops,target-cluster-agent=target-k8s-ops"
+          ports:
+            - containerPort: 8443
+              name: https
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: skills-webhook-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: skills-webhook
+  namespace: sympozium-system
+spec:
+  selector:
+    app: skills-webhook
+  ports:
+    - port: 443
+      targetPort: https
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: agentrun-skills-injector
+  annotations:
+    cert-manager.io/inject-ca-from: sympozium-system/skills-webhook
+webhooks:
+  - name: skills.agentruns.sympozium.local
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # Never block run creation if the webhook is down.
+    failurePolicy: Ignore
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: skills-webhook
+        namespace: sympozium-system
+        path: /mutate
+        port: 443
+    rules:
+      - apiGroups: ["sympozium.ai"]
+        apiVersions: ["v1alpha1"]
+        resources: ["agentruns"]
+        operations: ["CREATE"]
+        scope: Namespaced

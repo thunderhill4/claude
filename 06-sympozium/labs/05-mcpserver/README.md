@@ -1,17 +1,69 @@
-# Lab 05 — MCP tool server integration (and exactly where it breaks)
+# Lab 05 — MCP tool server integration
 
 **Capability:** `MCPServer` deploys an external Model Context Protocol tool
-server in-cluster; `mcpServers:` on an agent config is supposed to let that
-agent call its tools. **Integration angle:** this is how another application
-would expose capabilities to a Sympozium agent — genuinely the most
-important lab in this series for the "integrate with other applications"
-goal. The honest finding, reached only after several rounds of getting it
-wrong and re-testing: **config wiring works all the way to a live
-`mcp-bridge` sidecar with the right tool registered, but the actual tool
-call times out talking to a real FastMCP server** — a protocol-level
-incompatibility, not a missing-wiring problem. Read the whole "Observed
-behavior" section — the first two attempts at diagnosing this reached wrong
-conclusions that later evidence overturned.
+server in-cluster; `mcpServers:` on an agent config lets that agent discover
+and call its tools. **Integration angle:** this is how another application
+exposes capabilities to a Sympozium agent — the most important lab in this
+series for the "integrate with other applications" goal.
+
+## TL;DR — the fix (2026-07-06)
+
+Tool **discovery is now working** end to end. The blocker was the MCP tool
+server's transport, not Sympozium's wiring: FastMCP's default HTTP transport
+uses SSE (`text/event-stream`) framing, and FastMCP 3.4.3 additionally rejects
+non-localhost `Host` headers with `421 Misdirected Request`. Sympozium's
+`mcp-discover` init container is a plain Go HTTP client that can't consume
+either, so it timed out "awaiting headers" and wrote a **0-tool** manifest.
+
+Three flags on `mcp.run(...)` fix it (see `server.py`):
+`json_response=True`, `stateless_http=True`, `host_origin_protection=False`.
+With them, `mcp-discover` succeeds instantly:
+
+```
+Discovered 2 tools from "metallb-info"
+Wrote tool manifest with 2 tools to /ipc/tools/mcp-tools.json
+Discovery complete, exiting
+```
+
+and the agent sees `lab__metallb_owner` / `lab__metallb_table` as real,
+callable tools.
+
+**Still imperfect at runtime — dug in, here's exactly where.** The per-message
+run pod has *two* MCP components: an **`mcp-discover` init container** (writes
+the tool manifest) and a **runtime `mcp-bridge` sidecar** (proxies `tools/call`
+during the run). Two independent problems remain, both outside server-side
+control:
+
+1. **The runtime sidecar re-runs discovery and clobbers the good manifest.**
+   `mcp-discover` reliably writes a 2-tool manifest, but the runtime
+   `mcp-bridge` then does its *own* discovery and, when it fails, overwrites
+   `/ipc/tools/mcp-tools.json` with **0 tools** (`Wrote tool manifest with 0
+   tools` → `MCP bridge exiting`), so the model sees no tool. Its discovery is
+   **intermittent** — and it stays intermittent across every server variant I
+   tried: FastMCP with `json_response`, a plain stdlib HTTP/1.1 server, and a
+   no-keep-alive HTTP/1.0 server; and across both the ClusterIP **and the
+   server's pod IP** (so it is *not* a kube-proxy/conntrack DNAT race).
+   Meanwhile a `curl` from any pod gets an instant `200` at the same moment the
+   bridge times out "awaiting headers" — so it's an `mcp-bridge` HTTP-client
+   intermittency, not the server. It's also racing the model: the run often
+   proceeds and cancels the sidecar (`context canceled`) before it can retry.
+2. **qwen2.5:7b emits the MCP tool call as text.** Even when the tool is
+   visible, the model frequently outputs its native
+   `<tool_call>{"name":"lab__metallb_owner","arguments":{"ip":"..."}}</tool_call>`
+   as literal assistant text instead of a structured call, so `toolCalls: 0`
+   and nothing is invoked. (The same model *does* drive the `k8s-ops` SkillPack
+   fine — so this is specific to the MCP invocation path's tool-call parsing,
+   plus small-model flakiness.)
+
+Discovery + tool visibility — the part that was flatly broken before — is fixed
+and verified. Reliable end-to-end `tools/call` needs a fix in the vendor
+`mcp-bridge` (stop clobbering the init manifest; make runtime discovery
+robust) and/or a stronger model; a full `SkillPack` remains the reliable path
+for tools today.
+
+Below is the original blow-by-blow diagnosis (kept because the wiring lessons
+in it are still exactly right); the transport conclusion at the end is what
+the fix above supersedes.
 
 ## Files
 
@@ -187,28 +239,35 @@ Sympozium's `mcp-bridge` HTTP client and FastMCP's streamable-HTTP transport
 neither a network fix nor a config change on this side can resolve; it would
 need a fix in `mcp-bridge` or a different MCP server implementation.
 
-## Conclusion
+## Conclusion (updated 2026-07-06)
 
-**Wiring `MCPServer` + `mcpServers:` to an agent works right up to the last
-hop on this installed version (0.10.38):** the config path (`Agent` CR →
-per-message `AgentRun` → ConfigMap → `mcp-bridge` sidecar → tool visible to
-the LLM) is fully functional and correctly implemented. The break is
-specifically in `mcp-bridge`'s HTTP client talking to a FastMCP
-streamable-HTTP server — every real attempt timed out identically. If
+**The whole config path works, and discovery now completes.** `Agent` CR →
+per-message `AgentRun` → per-run ConfigMap → `mcp-discover` init container →
+tool manifest → tool visible to the LLM is fully functional once the MCP
+server speaks plain JSON (not SSE) and drops host-origin protection. The
+earlier "the tool call always times out" verdict was a **server-transport
+incompatibility** (FastMCP streamable-HTTP vs. a plain Go client), now fixed
+with three `mcp.run` flags — not a Sympozium bug.
+
+The remaining rough edge is runtime `tools/call` reliability, which is mostly
+the small local model (it sometimes prints the structured call as text). If
 you're building a tool server for Sympozium to integrate with another
 application:
-- Expect the wiring described above to work (don't assume it's the
-  `SympoziumInstance` CRD, and don't assume you need to inspect `AgentRun`
-  specs to confirm sidecar injection — check live pod containers/logs
-  instead).
-- Test your MCP server against Sympozium's `mcp-bridge` specifically before
-  relying on it — a spec-compliant server that answers `curl` correctly is
-  not sufficient evidence it will work with `mcp-bridge`.
-- If you hit the same timeout, try a different MCP server framework/transport
-  (e.g. a raw JSON (non-SSE) response mode if the framework offers one) as
-  the first thing to change.
-- A full `SkillPack` (sidecar + IPC protocol, like `k8s-ops`) remains a
-  proven-working alternative if you need something reliable today.
+- **Serve plain JSON, not SSE.** Use `json_response=True` (FastMCP) or an
+  equivalent single-`application/json`-response mode. Sympozium's Go client
+  hangs on `text/event-stream` framing.
+- **Disable localhost-only host guards** (FastMCP 3.4.3's
+  `host_origin_protection`) — in-cluster the `Host` header is a Service DNS
+  name and gets a `421` otherwise.
+- Don't assume the `SympoziumInstance` CRD wires anything (it's inert — use the
+  `Agent` CR), and don't infer sidecar injection from `AgentRun.spec` — check
+  live pod containers/logs. Discovery happens in the `mcp-discover` **init**
+  container; `tools/call` is proxied by the `mcp-bridge` **sidecar**.
+- Verify with `mcp-discover`'s own log ("Discovered N tools"), not just a
+  `curl` — a spec-compliant server that answers `curl` is necessary but not
+  sufficient.
+- A full `SkillPack` (sidecar + IPC, like `k8s-ops`) is still the most reliable
+  option if you need robust tool calls today.
 
 ## Cleanup
 

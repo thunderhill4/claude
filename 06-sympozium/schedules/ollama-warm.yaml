@@ -8,7 +8,7 @@ metadata:
   name: ollama-warm
   namespace: sympozium-system
 spec:
-  instanceRef: cluster2-agent
+  agentRef: cluster2-agent
   schedule: "*/4 * * * *"
   type: heartbeat
   concurrencyPolicy: Replace

@@ -1,0 +1,25 @@
+# A deliberately-broken workload for the agent to diagnose. The image tag does
+# not exist in any registry, so every pod sticks in ImagePullBackOff /
+# ErrImagePull with a clear reason in its events. Harmless (nothing runs) and
+# read-only to diagnose. Deployed + torn down by run-triage.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab-sre-broken
+  namespace: sympozium-system
+  labels:
+    lab: sre-triage
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: lab-sre-broken }
+  template:
+    metadata:
+      labels: { app: lab-sre-broken }
+    spec:
+      containers:
+        - name: app
+          # Non-existent tag on purpose → ImagePullBackOff.
+          image: nginx:this-tag-does-not-exist-9z9z9
+          ports:
+            - containerPort: 80

@@ -68,6 +68,15 @@ refinement of the analyst's isolation-vs-performance framing before adding
 its own structure. Context is clearly passed from source to target on a
 `sequential` edge.
 
+**Run-to-run variance (observed on a re-run):** the orchestration is
+deterministic, the output quality is not. On a second run the sequential
+edge fired identically, but `llama3.2` spent both its tool calls on memory
+searches and ended with "Please proceed with breaking down the key
+trade-offs..." — a hand-back instead of a refined final answer (172 output
+tokens vs the analyst's 951). Same small-model budget limitation as labs
+02/08: don't assume the last persona in a pipeline produces the polished
+deliverable every time.
+
 **Minor rough edge observed:** the reviewer's raw output included a stray,
 unexecuted `{"name": "memory_store", "parameters": {...}}` JSON blob inline
 in its text response — it looks like the model attempted (or hallucinated)

@@ -77,6 +77,9 @@ deploy_agents() {
         kubectl get svc "$svc" -n "$SYMPOZIUM_NS" &>/dev/null \
             || die "Service $svc never appeared; try 'kubectl describe sympoziuminstance/$inst -n $SYMPOZIUM_NS'"
     done
+
+    bash "$REPO_ROOT/06-sympozium/fix-web-proxy-rootfs.sh" \
+        cost-analyzer-web-endpoint-server incident-responder-web-endpoint-server
 }
 
 expose_agents() {
