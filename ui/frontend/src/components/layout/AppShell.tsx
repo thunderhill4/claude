@@ -11,7 +11,8 @@ export function AppShell() {
   const { mode, setMode, toggleMode } = useMode();
   const [namespace, setNamespace] = useState('all');
   const [activePath, setActivePath] = useState('dashboard');
-  const [visualPath, setVisualPath] = useState('topology');
+  const [visualPath, setVisualPath] = useState('command');
+  const [terminalOpen, setTerminalOpen] = useState(false);
 
   return (
     <div className="flex h-screen flex-col dark">
@@ -21,6 +22,8 @@ export function AppShell() {
         onSetMode={setMode}
         namespace={namespace}
         onNamespaceChange={setNamespace}
+        terminalOpen={terminalOpen}
+        onToggleTerminal={() => setTerminalOpen((v) => !v)}
       />
       <div className="flex flex-1 overflow-hidden">
         {mode === 'sre' && (
@@ -31,7 +34,12 @@ export function AppShell() {
         )}
         <main className="flex-1 overflow-auto">
           {mode === 'sre' ? (
-            <SREDashboard activePath={activePath} namespace={namespace} />
+            <SREDashboard
+              activePath={activePath}
+              namespace={namespace}
+              terminalOpen={terminalOpen}
+              onCloseTerminal={() => setTerminalOpen(false)}
+            />
           ) : mode === 'ai' ? (
             <AIChat />
           ) : (

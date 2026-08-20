@@ -12,7 +12,8 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': 'http://localhost:8080',
+      // ws: true so the /api/v1/terminal WebSocket upgrades pass through
+      '/api': { target: 'http://localhost:8080', ws: true },
     },
   },
 })

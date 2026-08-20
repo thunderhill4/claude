@@ -1,4 +1,4 @@
-import type { KubeNode, Pod, VirtualMachine, KubeEvent, ClusterStatus, Namespace, DeployLogEntry, TargetClusterStatus, DVImage, RegistryImage, RegistryConfig, ScanRequest, ScanResult, RegistryScanRequest, RegistryScanResult, RulesResponse, ChatEnvelope, Proposal, PoolStatus } from './types';
+import type { KubeNode, Pod, VirtualMachine, KubeEvent, ClusterStatus, Namespace, DeployLogEntry, TargetClusterStatus, DVImage, RegistryImage, RegistryConfig, ScanRequest, ScanResult, RegistryScanRequest, RegistryScanResult, RulesResponse, ChatEnvelope, Proposal, PoolStatus, MeshGraph } from './types';
 
 const BASE = '/api/v1';
 
@@ -18,8 +18,10 @@ export interface AgentsResponse {
   default: string;
 }
 
+
 export const api = {
   getClusterStatus: () => fetchJSON<ClusterStatus>(`${BASE}/cluster/status`),
+  getMeshTopology: () => fetchJSON<MeshGraph>(`${BASE}/mesh/topology`),
   getNodes: () => fetchJSON<KubeNode[]>(`${BASE}/nodes`),
   getPods: (namespace?: string) => {
     const params = namespace && namespace !== 'all' ? `?namespace=${namespace}` : '';

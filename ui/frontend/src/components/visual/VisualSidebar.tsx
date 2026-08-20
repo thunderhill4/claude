@@ -1,7 +1,8 @@
-import { Network, Globe, Route, Shield, Activity, Waypoints, Radar, Zap } from 'lucide-react';
+import { BrainCircuit, Network, Globe, Route, Shield, Activity, Waypoints, Radar, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
+  { label: 'Command Center', icon: BrainCircuit, path: 'command' },
   { label: 'Topology', icon: Network, path: 'topology' },
   { label: 'Live Demo', icon: Zap, path: 'demo' },
   { label: 'Services', icon: Globe, path: 'services' },

@@ -179,7 +179,7 @@ export function ChatPanel() {
           <div className="text-center">
             <h2 className="text-xl font-semibold text-foreground">KubeUI Assistant</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Powered by Sympozium ({selectedAgent})
+              Connected to {selectedAgent}
             </p>
           </div>
           <SuggestedPrompts onSelect={sendMessage} />

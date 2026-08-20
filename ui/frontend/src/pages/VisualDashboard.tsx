@@ -1,3 +1,4 @@
+import { CommandCenter } from '@/components/visual/CommandCenter';
 import { TopologyView } from '@/components/visual/TopologyView';
 import { CrossClusterDemo } from '@/components/visual/CrossClusterDemo';
 import { ServiceManagement } from '@/components/visual/ServiceManagement';
@@ -13,6 +14,8 @@ interface VisualDashboardProps {
 
 export function VisualDashboard({ activePath }: VisualDashboardProps) {
   switch (activePath) {
+    case 'command':
+      return <CommandCenter />;
     case 'topology':
       return <TopologyView />;
     case 'demo':
@@ -30,6 +33,6 @@ export function VisualDashboard({ activePath }: VisualDashboardProps) {
     case 'diagnostics':
       return <Diagnostics />;
     default:
-      return <TopologyView />;
+      return <CommandCenter />;
   }
 }

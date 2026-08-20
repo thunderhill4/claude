@@ -3,6 +3,13 @@
 @import "shadcn/tailwind.css";
 @plugin "@tailwindcss/typography";
 
+/* HUD faces — self-hosted, no CDN (command center only) */
+@import "@fontsource/chakra-petch/400.css";
+@import "@fontsource/chakra-petch/500.css";
+@import "@fontsource/chakra-petch/600.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -122,4 +129,98 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* ── Command center HUD ──────────────────────────────────────────────────────
+   Scoped under .hud so nothing here leaks into the rest of the app. Thesis:
+   a tri-lobe neural brain rendered as a Stark HUD — three clusters as three
+   glowing lobes, cross-cluster traffic firing amber across the hemispheres. */
+.hud {
+  --hud-cyan: #34e4ff;   /* cluster1 lobe */
+  --hud-violet: #a78bfa; /* cluster2 lobe */
+  --hud-teal: #34f0c2;   /* target-cluster lobe + healthy */
+  --hud-amber: #ffb454;  /* cross-cluster / degraded / arc core */
+  --hud-red: #ff5d6c;    /* error */
+  --hud-void: #05070e;
+  --hud-line: rgba(120, 200, 255, 0.14);
+  --hud-line-strong: rgba(120, 200, 255, 0.3);
+  --hud-glass: rgba(16, 28, 48, 0.5);
+  --hud-text: #dceefc;
+  --hud-text-dim: rgba(180, 214, 245, 0.6);
+
+  font-family: "Chakra Petch", ui-sans-serif, system-ui, sans-serif;
+  color: var(--hud-text);
+  position: relative;
+  background:
+    radial-gradient(120% 90% at 50% -10%, rgba(52, 228, 255, 0.06), transparent 55%),
+    radial-gradient(90% 80% at 50% 115%, rgba(167, 139, 250, 0.07), transparent 55%),
+    var(--hud-void);
+}
+/* faint reference grid, faded at the edges */
+.hud::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--hud-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--hud-line) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(circle at 50% 44%, #000 0%, transparent 76%);
+  mask-image: radial-gradient(circle at 50% 44%, #000 0%, transparent 76%);
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.hud-mono {
+  font-family: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+  font-feature-settings: "tnum" 1;
+}
+.hud-eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  font-size: 10px;
+  color: var(--hud-text-dim);
+}
+
+/* glass panel with hairline corner ticks */
+.hud-panel {
+  position: relative;
+  background: var(--hud-glass);
+  border: 1px solid var(--hud-line);
+  border-radius: 10px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.hud-panel::after {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background:
+    linear-gradient(var(--hud-line-strong), var(--hud-line-strong)) top left / 12px 1px no-repeat,
+    linear-gradient(var(--hud-line-strong), var(--hud-line-strong)) top left / 1px 12px no-repeat,
+    linear-gradient(var(--hud-line-strong), var(--hud-line-strong)) top right / 12px 1px no-repeat,
+    linear-gradient(var(--hud-line-strong), var(--hud-line-strong)) top right / 1px 12px no-repeat,
+    linear-gradient(var(--hud-line-strong), var(--hud-line-strong)) bottom left / 12px 1px no-repeat,
+    linear-gradient(var(--hud-line-strong), var(--hud-line-strong)) bottom left / 1px 12px no-repeat,
+    linear-gradient(var(--hud-line-strong), var(--hud-line-strong)) bottom right / 12px 1px no-repeat,
+    linear-gradient(var(--hud-line-strong), var(--hud-line-strong)) bottom right / 1px 12px no-repeat;
+  pointer-events: none;
+}
+
+@keyframes hud-spin { to { transform: rotate(360deg); } }
+@keyframes hud-spin-rev { to { transform: rotate(-360deg); } }
+@keyframes hud-dash { to { stroke-dashoffset: -240; } }
+@keyframes hud-pulse-soft { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+.hud-spin { animation: hud-spin 68s linear infinite; transform-origin: center; transform-box: fill-box; }
+.hud-spin-rev { animation: hud-spin-rev 96s linear infinite; transform-origin: center; transform-box: fill-box; }
+.hud-synapse { animation: hud-dash 3.2s linear infinite; }
+.hud-synapse-x { animation: hud-dash 1.5s linear infinite; }
+.hud-live-dot { animation: hud-pulse-soft 1.8s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-spin, .hud-spin-rev, .hud-synapse, .hud-synapse-x, .hud-live-dot { animation: none !important; }
 }

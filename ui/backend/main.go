@@ -92,9 +92,15 @@ func main() {
 		}
 	})
 
+	// Web terminal (WebSocket PTY; one shell per connection/tab)
+	mux.HandleFunc("/api/v1/terminal", handlers.HandleTerminal)
+
 	// Cross-cluster demo: live probing + failure simulation
 	mux.HandleFunc("/api/v1/cross-cluster/probe", handlers.HandleCrossClusterProbe)
 	mux.HandleFunc("/api/v1/cross-cluster/scale", handlers.HandleCrossClusterScale)
+
+	// Service mesh topology (live overlay on static skeleton) for the command center
+	mux.HandleFunc("/api/v1/mesh/topology", handlers.HandleMeshTopology)
 
 	// Security agent proxy
 	securityProxy := handlers.NewSecurityProxy()
@@ -110,6 +116,10 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+
+	// De-branded Sympozium console for the AI tab (own port; see
+	// handlers/dashboard_proxy.go for why it can't share :8080).
+	go handlers.StartDashboardProxy()
 
 	server := &http.Server{
 		Addr:    ":8080",

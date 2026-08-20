@@ -97,10 +97,11 @@ type LogEntry struct {
 // ── Deployment state ─────────────────────────────────────────────
 
 type deployManager struct {
-	mu    sync.Mutex
-	state string // idle | running | done | failed
-	logs  []LogEntry
-	subs  []chan LogEntry
+	mu        sync.Mutex
+	state     string // idle | running | done | failed
+	logs      []LogEntry
+	subs      []chan LogEntry
+	startTime time.Time
 }
 
 var deploy = &deployManager{state: "idle"}
@@ -125,6 +126,7 @@ func (d *deployManager) resetForNewRun() {
 	d.subs = nil
 	d.logs = nil
 	d.state = "running"
+	d.startTime = time.Now()
 }
 
 func (d *deployManager) addLog(t, msg string) {
@@ -143,6 +145,13 @@ func (d *deployManager) addLog(t, msg string) {
 }
 
 func (d *deployManager) finish(state string) {
+	if state == "done" {
+		d.mu.Lock()
+		elapsed := time.Since(d.startTime).Round(time.Second)
+		d.mu.Unlock()
+		d.addLog("success", fmt.Sprintf("⏱ Total time: %s", elapsed))
+	}
+
 	d.mu.Lock()
 	d.state = state
 	subs := make([]chan LogEntry, len(d.subs))
@@ -344,6 +353,10 @@ func waitForTargetReady(expectedVMs int) error {
 	for time.Now().Before(kcTimeout) {
 		if err := runShell(fmt.Sprintf("clusterctl get kubeconfig %s > %s 2>/dev/null", targetClusterName, kubeconfigPath)); err == nil {
 			runShell(fmt.Sprintf("cp %s %s 2>/dev/null || true", kubeconfigPath, kubeconfigLocal))
+			// Keep the in-cluster Secret target-cluster-agent uses in sync with
+			// this deploy's kubeconfig (target CA changes on redeploy). No-op if
+			// Sympozium isn't installed.
+			runShell(fmt.Sprintf("bash %s/06-sympozium/refresh-target-kubeconfig.sh %s 2>/dev/null || true", dir, kubeconfigPath))
 			deploy.addLog("success", "✓ Kubeconfig retrieved → "+kubeconfigPath)
 			gotKC = true
 			break

@@ -277,6 +277,10 @@ func runClaim() {
 	kubeconfigLocal := filepath.Join(claudeDir(), targetClusterName+"-kubeconfig")
 	_ = runShell(fmt.Sprintf("clusterctl get kubeconfig %s > %s 2>/dev/null && cp %s %s 2>/dev/null || true",
 		targetClusterName, kubeconfigPath, kubeconfigPath, kubeconfigLocal))
+	// Sync the in-cluster Secret target-cluster-agent uses (target CA changes
+	// per standby). No-op if Sympozium isn't installed.
+	_ = runShell(fmt.Sprintf("bash %s/06-sympozium/refresh-target-kubeconfig.sh %s 2>/dev/null || true",
+		claudeDir(), kubeconfigPath))
 
 	pool.setBuildState("claimed", "")
 	pool.setReady(true)

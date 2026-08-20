@@ -87,6 +87,34 @@ export interface ResourceRef {
 
 export type AppMode = 'sre' | 'ai' | 'visual';
 
+// ── Service mesh topology (command center) ────────────────────────────────────
+
+export type MeshNodeType = 'cluster' | 'gateway' | 'service' | 'workload' | 'proxy' | 'vm';
+export type MeshNodeStatus = 'healthy' | 'degraded' | 'error';
+
+export interface MeshNode {
+  id: string;
+  label: string;
+  type: MeshNodeType;
+  status: MeshNodeStatus;
+  cluster?: string;
+  meta?: Record<string, string>;
+}
+
+export interface MeshEdge {
+  from: string;
+  to: string;
+  label: string;
+  protocol: string;
+  dashed?: boolean;
+}
+
+export interface MeshGraph {
+  nodes: MeshNode[];
+  edges: MeshEdge[];
+  source: 'live' | 'mixed' | 'fallback';
+}
+
 export interface DeployLogEntry {
   type: 'step' | 'info' | 'success' | 'error' | 'warn' | 'done';
   message: string;

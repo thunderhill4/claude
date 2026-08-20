@@ -519,3 +519,33 @@ func HandleListAgents(w http.ResponseWriter, r *http.Request) {
 		"default": defaultAgent,
 	})
 }
+
+// ── Dashboard login token ─────────────────────────────────────────
+
+var (
+	dashTokenOnce  sync.Once
+	dashTokenValue string
+)
+
+// getDashboardToken returns the Sympozium dashboard's login token, used by the
+// console proxy (dashboard_proxy.go) to pre-seed the embedded console's auth.
+// This is the sympozium-ui-token Secret — NOT SYMPOZIUM_API_TOKEN, which
+// run-ui.sh loads from the per-agent web-proxy-key Secret (a different
+// credential the dashboard login does not accept).
+func getDashboardToken(ctx context.Context) string {
+	if t := os.Getenv("SYMPOZIUM_UI_TOKEN"); t != "" {
+		return t
+	}
+	dashTokenOnce.Do(func() {
+		if k8sclient.Clientset == nil {
+			return
+		}
+		sec, err := k8sclient.Clientset.CoreV1().Secrets(sympoziumNamespace()).Get(ctx, "sympozium-ui-token", metav1.GetOptions{})
+		if err != nil {
+			log.Printf("AI: sympozium-ui-token lookup failed: %v", err)
+			return
+		}
+		dashTokenValue = string(sec.Data["token"])
+	})
+	return dashTokenValue
+}

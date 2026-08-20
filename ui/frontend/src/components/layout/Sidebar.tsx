@@ -1,6 +1,9 @@
 import { LayoutDashboard, Server, Box, Monitor, CalendarClock, Layers, HardDrive, Database, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
+// Terminal is not a nav destination — it's a resizable panel docked at the
+// bottom of the SRE view, toggled from the header (see Header.tsx) so it can
+// stay open alongside whichever of these sub-views is active.
 const navItems = [
   { label: 'Dashboard', icon: LayoutDashboard, path: 'dashboard' },
   { label: 'Nodes', icon: Server, path: 'nodes' },

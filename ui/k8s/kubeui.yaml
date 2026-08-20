@@ -80,11 +80,25 @@ spec:
                   name: sympozium-ui-token
                   key: token
                   optional: true
+            # Login token the console proxy injects into the embedded
+            # dashboard (sympozium-ui-token, NOT the per-agent web-proxy-key).
+            - name: SYMPOZIUM_UI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sympozium-ui-token
+                  key: token
+                  optional: true
+            # Upstream for the console proxy on :8081 — server-side, so
+            # in-cluster DNS is fine here.
+            - name: SYMPOZIUM_DASHBOARD_URL
+              value: "http://sympozium-apiserver.sympozium-system.svc.cluster.local:8080"
             - name: SECURITY_AGENT_URL
               value: "http://security-agent.kubeui.svc.cluster.local:8082"
           ports:
             - containerPort: 8080
               name: http
+            - containerPort: 8081
+              name: console
           livenessProbe:
             httpGet:
               path: /healthz
@@ -121,6 +135,9 @@ spec:
     - port: 8080
       targetPort: http
       name: http
+    - port: 8081
+      targetPort: console
+      name: console
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -149,6 +166,9 @@ spec:
           ports:
             - containerPort: 80
               name: http
+            # AI console passthrough (nginx server block on 8081 → backend:8081)
+            - containerPort: 8081
+              name: console
           livenessProbe:
             httpGet:
               path: /
@@ -188,3 +208,7 @@ spec:
     - port: 80
       targetPort: http
       name: http
+    # AI console (embedded in the AI tab as http://<LB-IP>:8081)
+    - port: 8081
+      targetPort: console
+      name: console
