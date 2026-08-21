@@ -102,6 +102,21 @@ func main() {
 	// Service mesh topology (live overlay on static skeleton) for the command center
 	mux.HandleFunc("/api/v1/mesh/topology", handlers.HandleMeshTopology)
 
+	// Istio 1.30 ambient mesh + Gateway API (07-istio-advanced). Reads span
+	// cluster1 + cluster2; each degrades to partial data with a `source` field
+	// rather than failing when a context is unreachable.
+	mux.HandleFunc("/api/v1/istio/overview", handlers.HandleIstioOverview)
+	mux.HandleFunc("/api/v1/istio/gateways", handlers.HandleIstioGateways)
+	mux.HandleFunc("/api/v1/istio/waypoint", handlers.HandleIstioWaypoint)
+	mux.HandleFunc("/api/v1/istio/multicluster", handlers.HandleIstioMulticluster)
+	mux.HandleFunc("/api/v1/istio/ai-gateway", handlers.HandleIstioAIGateway)
+	mux.HandleFunc("/api/v1/istio/observability", handlers.HandleIstioObservability)
+	// Mutating: drive the demo acts. Targets are a closed allowlist; the
+	// failover handler restores replicas even on client disconnect.
+	mux.HandleFunc("/api/v1/istio/probe", handlers.HandleIstioProbe)
+	mux.HandleFunc("/api/v1/istio/identity-probe", handlers.HandleIstioIdentityProbe)
+	mux.HandleFunc("/api/v1/istio/failover", handlers.HandleIstioFailover)
+
 	// Security agent proxy
 	securityProxy := handlers.NewSecurityProxy()
 	mux.Handle("/api/v1/security/", securityProxy)

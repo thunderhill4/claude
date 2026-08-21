@@ -11,7 +11,7 @@ export function AppShell() {
   const { mode, setMode, toggleMode } = useMode();
   const [namespace, setNamespace] = useState('all');
   const [activePath, setActivePath] = useState('dashboard');
-  const [visualPath, setVisualPath] = useState('command');
+  const [visualPath, setVisualPath] = useState('overview');
   const [terminalOpen, setTerminalOpen] = useState(false);
 
   return (

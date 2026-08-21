@@ -225,3 +225,81 @@ export async function getSecurityRules(): Promise<RulesResponse> {
   if (!res.ok) throw new Error(`rules fetch failed: ${res.statusText}`);
   return res.json();
 }
+
+// ── Istio 1.30 ambient mesh / Gateway API (07-istio-advanced) ──────────────
+
+import type {
+  IstioOverview, IstioGateways, IstioWaypoint, IstioMulticluster,
+  IstioAIGateway, IstioObservability, IdentityProbeResponse, ProbeEvent,
+} from './types';
+
+/**
+ * Shared SSE reader for the streaming Istio actions.
+ *
+ * Extracted rather than copy-pasting the reader loop a third time: the existing
+ * deployCluster/installIstio generators each inline it, and the buffering bug
+ * they share (a chunk boundary can split a `data:` line) is easier to fix once.
+ * This version keeps a carry buffer across chunks.
+ */
+async function* streamSSE<T>(res: Response): AsyncGenerator<T> {
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  const reader = res.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() ?? ''; // keep the partial line for the next chunk
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const raw = line.slice(6).trim();
+      if (!raw) continue;
+      if (raw === '[DONE]') return;
+      try {
+        yield JSON.parse(raw) as T;
+      } catch {
+        // skip malformed lines
+      }
+    }
+  }
+}
+
+export const istioApi = {
+  overview: () => fetchJSON<IstioOverview>(`${BASE}/istio/overview`),
+  gateways: () => fetchJSON<IstioGateways>(`${BASE}/istio/gateways`),
+  waypoint: () => fetchJSON<IstioWaypoint>(`${BASE}/istio/waypoint`),
+  multicluster: () => fetchJSON<IstioMulticluster>(`${BASE}/istio/multicluster`),
+  aiGateway: () => fetchJSON<IstioAIGateway>(`${BASE}/istio/ai-gateway`),
+  observability: () => fetchJSON<IstioObservability>(`${BASE}/istio/observability`),
+
+  /** Act 1 — drive the canary; one event per response so the split fills in live. */
+  probe: async function* (count = 100, internal = false): AsyncGenerator<ProbeEvent> {
+    const res = await fetch(`${BASE}/istio/probe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count, internal }),
+    });
+    yield* streamSSE<ProbeEvent>(res);
+  },
+
+  /** Act 2 — same request from two SPIFFE identities. */
+  identityProbe: async (): Promise<IdentityProbeResponse> => {
+    const res = await fetch(`${BASE}/istio/identity-probe`, { method: 'POST' });
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    return res.json();
+  },
+
+  /**
+   * Act 3 — scale cluster1 to zero and watch cluster2 serve.
+   *
+   * The backend restores replicas from a deferred handler on its own background
+   * context, so abandoning this stream does NOT leave the cluster scaled down.
+   */
+  failover: async function* (): AsyncGenerator<ProbeEvent> {
+    const res = await fetch(`${BASE}/istio/failover`, { method: 'POST' });
+    yield* streamSSE<ProbeEvent>(res);
+  },
+};
