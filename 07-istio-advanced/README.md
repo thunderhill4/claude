@@ -128,11 +128,27 @@ Grafana is reused, not reinstalled.
   everything else looks healthy. Act 3 asserts both directions reach `synced`
   before continuing, because every cross-cluster claim after that point would
   otherwise be false.
-- **Acts 2 and 3 interact.** Act 2's `echo-internal-split` HTTPRoute pins the echo
-  Service to the `echo-v1`/`echo-v2` Services, which are not labeled
-  `istio.io/global`. Leave it in place and Act 3's failover returns 503 on every
-  request instead of failing over. A route targeting non-global backends overrides
-  global routing. Act 3 removes that route and explains why.
+- **Acts 2 and 3 interact, in TWO separate ways.** Both make Act 3's failover return
+  503 on every request while everything looks healthy.
+  1. Act 2's `echo-internal-split` HTTPRoute pins the echo Service to the
+     `echo-v1`/`echo-v2` Services, which are not labeled `istio.io/global`. A route
+     targeting non-global backends overrides global routing. Act 3 removes it.
+  2. **A waypoint-fronted Service resolves only LOCAL endpoints.** Once Act 2 enrolls
+     the namespace, `echo` is fronted by the waypoint, and the waypoint's endpoint
+     list contains only local pod IPs — cross-cluster endpoints are programmed into
+     **ztunnel**, which the waypoint bypasses. Measured:
+
+     ```
+     istioctl proxy-config endpoints deploy/waypoint.demo-apps
+       -> 10.244.0.42/.43/.44 only, for echo.demo-apps
+     istioctl ztunnel-config workload
+       -> network2/SplitHorizonWorkload/.../172.18.255.221/... IS present
+     ```
+
+     Fix: opt the global Service out of the waypoint with
+     `istio.io/use-waypoint: none` for the duration. Verified — 503 on every request
+     with the waypoint in path, 200 within 6s of the opt-out. The UI's failover action
+     does this automatically and restores the label afterwards.
 
 ## Teardown
 
