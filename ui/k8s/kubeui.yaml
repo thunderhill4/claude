@@ -70,6 +70,20 @@ spec:
           image: kubeui-backend:latest
           imagePullPolicy: IfNotPresent
           env:
+            # Where the backend DIALS the registry, vs what it DISPLAYS.
+            # 172.18.0.2:5000 is a fixed alias, not a real address — containerd
+            # resolves it per-node via certs.d (scripts/fix-registry-hosts.sh),
+            # but that mapping does not apply to this process's HTTP client, so
+            # dialing the alias always fails. Point REGISTRY_URL at the registry
+            # container's actual kind-network IP:
+            #   docker inspect -f \
+            #     '{{(index .NetworkSettings.Networks "kind").IPAddress}}' registry
+            # That IP drifts when containers reconnect, so re-check it after a
+            # docker/host restart if the Registry tab shows "disconnected".
+            - name: REGISTRY_URL
+              value: "http://172.18.0.4:5000"
+            - name: REGISTRY_ALIAS
+              value: "172.18.0.2:5000"
             - name: SYMPOZIUM_NAMESPACE
               value: "sympozium-system"
             - name: SYMPOZIUM_DEFAULT_AGENT

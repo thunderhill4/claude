@@ -26,6 +26,35 @@ fi
 
 SECURITY_AGENT_URL="${SECURITY_AGENT_URL:-http://localhost:8082}"
 
+# Local container registry.
+#
+# REGISTRY_ALIAS is the fixed name image references use (and what the UI shows).
+# REGISTRY_URL is where the backend actually dials — they are NOT the same.
+# 172.18.0.2 is an alias docker assigns to whichever container joined the kind
+# network first (usually a kind node); the registry's own IP drifts. Image pulls
+# survive that via scripts/fix-registry-hosts.sh writing containerd's certs.d,
+# but that mapping is containerd-only — a plain HTTP client gets connection
+# refused. Hence the split.
+#
+# The backend runs on the host here, so prefer the registry's published port on
+# localhost (stable across IP drift); fall back to its live kind-network IP.
+REGISTRY_ALIAS="${REGISTRY_ALIAS:-172.18.0.2:5000}"
+if [[ -z "${REGISTRY_URL:-}" ]]; then
+    if curl -sf --max-time 3 http://localhost:5000/v2/ >/dev/null 2>&1; then
+        REGISTRY_URL="http://localhost:5000"
+    else
+        _reg_ip="$(docker inspect -f '{{(index .NetworkSettings.Networks "kind").IPAddress}}'                    "${REGISTRY_CONTAINER:-registry}" 2>/dev/null || true)"
+        if [[ -n "$_reg_ip" ]]; then
+            REGISTRY_URL="http://${_reg_ip}:5000"
+        else
+            REGISTRY_URL="http://${REGISTRY_ALIAS}"
+            echo "WARNING: local registry not reachable — Registry tab will show disconnected"
+        fi
+    fi
+fi
+echo "Registry: dialing ${REGISTRY_URL} (displayed as ${REGISTRY_ALIAS})"
+export REGISTRY_URL REGISTRY_ALIAS
+
 # Warm pool config for target-cluster pre-deployment.
 # Opt-in: export POOL_ENABLED=true before running this script to have the
 # backend auto-build/rebuild a standby cluster in the background.

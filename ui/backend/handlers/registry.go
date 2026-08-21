@@ -6,13 +6,14 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 type RegistryImage struct {
-	Name    string   `json:"name"`
-	Tags    []string `json:"tags"`
+	Name    string    `json:"name"`
+	Tags    []string  `json:"tags"`
 	TagInfo []TagInfo `json:"tagInfo"`
 }
 
@@ -28,7 +29,33 @@ type RegistryConfig struct {
 	Name string `json:"name"`
 }
 
-var registryURL = "http://172.18.0.2:5000"
+// registryURL is where this process actually DIALS the registry.
+// registryAlias is the name shown in the UI and used in image references.
+//
+// These are deliberately separate. 172.18.0.2:5000 is a fixed ALIAS, not a real
+// address: docker hands 172.18.0.2 to whichever container attached to the kind
+// network first (usually a kind node), and the registry container's own IP
+// drifts. Image pulls work because scripts/fix-registry-hosts.sh writes
+// /etc/containerd/certs.d/<alias>/hosts.toml on each node, mapping the alias to
+// the registry's current IP -- but that mapping is containerd-only. A plain Go
+// HTTP client gets connection refused, which is why the Registry tab reported
+// "disconnected" from both the host and in-cluster.
+//
+// So: dial a real address via REGISTRY_URL, keep displaying the alias.
+//
+//	dev (run-ui.sh, host process): http://localhost:5000  (published port)
+//	in-cluster:                    the registry's kind-network IP:5000
+var (
+	registryURL   = envOrDefault("REGISTRY_URL", "http://172.18.0.2:5000")
+	registryAlias = envOrDefault("REGISTRY_ALIAS", "172.18.0.2:5000")
+)
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 // GET /api/v1/registry/images
 func HandleRegistryImages(w http.ResponseWriter, r *http.Request) {
@@ -141,9 +168,14 @@ func HandleRegistryConfig(w http.ResponseWriter, r *http.Request) {
 		resp.Body.Close()
 	}
 
-	// Extract a friendly name from URL
-	name := strings.TrimPrefix(registryURL, "http://")
-	name = strings.TrimPrefix(name, "https://")
+	// Show the alias, not the dial address: it is what image references use
+	// (172.18.0.2:5000/ubuntu-noble-k3s:latest), so it is what a user needs to
+	// see. Falls back to deriving from the URL if the alias is cleared.
+	name := registryAlias
+	if name == "" {
+		name = strings.TrimPrefix(registryURL, "http://")
+		name = strings.TrimPrefix(name, "https://")
+	}
 
 	config := map[string]string{
 		"url":    registryURL,

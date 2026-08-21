@@ -323,6 +323,21 @@ The UI is deployed to the `kubeui` namespace on cluster2 (`ui/k8s/kubeui.yaml`):
   reuse it, and deletes the serving AgentRuns so the controller regenerates the
   Deployments). Re-run `./sympozium-lb-setup.sh` afterwards — regenerated Services come
   back as ClusterIP and lose their MetalLB IPs.
+- **`172.18.0.2:5000` is a registry ALIAS, and only containerd can resolve it.**
+  docker gives `172.18.0.2` to whichever container joined the kind network first —
+  here that is `cluster2-control-plane`, not the registry (which sits at `172.18.0.4`
+  and publishes to the host on `localhost:5000`). Image pulls work because
+  `scripts/fix-registry-hosts.sh` writes `/etc/containerd/certs.d/<alias>/hosts.toml`
+  on each node, but **that mapping is containerd-only** — any plain HTTP client
+  dialing the alias gets connection refused. This silently broke the UI's Registry
+  tab (`{"error":"failed to connect to registry"}`, status `disconnected`) from both
+  the host and in-cluster. `ui/backend/handlers/registry.go` now splits the two
+  concepts: `REGISTRY_URL` is where it dials, `REGISTRY_ALIAS` is what it displays
+  (the alias is what image references use, so it is what a user needs to see).
+  `run-ui.sh` prefers `localhost:5000` (published port, stable across IP drift) and
+  falls back to the container's live kind-network IP. `ui/k8s/kubeui.yaml` sets both
+  explicitly — its `REGISTRY_URL` holds a real IP that **drifts**, so re-check it if
+  the tab shows "disconnected" after a docker or host restart.
 - **Upgrading the Sympozium chart:** apply the `sympozium-crds` chart first (Helm never
   upgrades CRDs in `crds/`), then `helm upgrade --server-side=true --force-conflicts`.
   Note `--server-side=true` **with a value** — Helm 4 made the flag take an argument, so
