@@ -314,3 +314,44 @@ sympozium-demo: ## Run end-to-end Sympozium demo (agent fixes a stuck VM)
 sympozium-demo-clean: ## Restore VMs stopped by the demo and delete demo agents
 	bash 06-sympozium/demo-sympozium.sh --restore
 	kubectl delete --ignore-not-found -f 06-sympozium/cost-analyzer.yaml -f 06-sympozium/incident-responder.yaml
+
+# ── 07 Istio Advanced (Gateway API / waypoints / multicluster / AI gateway) ──
+# Five-act Istio 1.30 demo on cluster1 + cluster2. See 07-istio-advanced/README.md.
+# Independent of `make istio`, which installs 1.28 ambient on target-cluster.
+
+istio-adv-prereqs:
+	bash 07-istio-advanced/00-prereqs/install-metallb-cluster1.sh
+	bash 07-istio-advanced/00-prereqs/install-gateway-api.sh
+	bash 07-istio-advanced/00-prereqs/install-cert-manager.sh
+
+istio-adv-install:
+	bash 07-istio-advanced/01-install/gen-mesh-ca.sh
+	bash 07-istio-advanced/01-install/install-istio.sh
+
+istio-adv-act1:
+	bash 07-istio-advanced/act1-gateway/run.sh
+
+istio-adv-act2:
+	bash 07-istio-advanced/act2-waypoint/run.sh
+
+istio-adv-act3:
+	bash 07-istio-advanced/act3-multicluster/run.sh
+
+istio-adv-act4:
+	bash 07-istio-advanced/act4-ai-gateway/run.sh
+
+istio-adv-act5:
+	bash 07-istio-advanced/act5-observability/run.sh
+
+istio-adv-demo:
+	bash 07-istio-advanced/demo.sh
+
+istio-adv-verify:
+	bash 07-istio-advanced/verify.sh
+
+istio-adv-clean:
+	bash 07-istio-advanced/clean.sh
+
+.PHONY: istio-adv-prereqs istio-adv-install istio-adv-act1 istio-adv-act2 \
+        istio-adv-act3 istio-adv-act4 istio-adv-act5 istio-adv-demo \
+        istio-adv-verify istio-adv-clean

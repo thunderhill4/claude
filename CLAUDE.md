@@ -9,7 +9,10 @@ Always verify changes against the "Architecture Constraints" section in that fil
 This repo provisions Kubernetes target clusters as KubeVirt VMs on a Kind-based management cluster, with Istio ambient mesh for cross-cluster service discovery and a full-stack web UI for cluster management, AI-powered operations, and service mesh visualization.
 
 **Clusters:**
-- `cluster1` (Kind) — Istio ambient mesh with sample workloads (`httpbin`, `sleep`)
+- `cluster1` (Kind) — demo/mesh cluster. Bare by default; `07-istio-advanced/` installs
+  MetalLB + Istio 1.30 ambient + Gateway API on it. (It previously hosted an ad-hoc
+  ambient mesh with `httpbin`/`sleep`; that was lost in a rebuild and is not recreated
+  by any script.)
 - `cluster2` (Kind) — Management cluster running CAPI, KubeVirt, CDI, MetalLB, Sympozium
 - `target-cluster` — k3s cluster provisioned as KubeVirt VMs on cluster2 via CAPI
 
@@ -43,21 +46,38 @@ This repo provisions Kubernetes target clusters as KubeVirt VMs on a Kind-based 
 
 ## MetalLB IP Assignments
 
-Pool: `172.18.255.200–210` (cluster1), `172.18.255.211–220` (cluster2)
+Pool: `172.18.255.200–210` (cluster1, installed by
+`07-istio-advanced/00-prereqs/install-metallb-cluster1.sh`), `172.18.255.211–220`
+(cluster2, installed by `01-metallb/install-metallb.sh`)
+
+**Do not run `01-metallb/install-metallb.sh` against cluster1.** It computes an IP range
+then `sed`s for `IP_RANGE_PLACEHOLDER`, which does not exist in
+`01-metallb/metallb-config.yaml` (the pool is hardcoded to `.211-.220`). The sed is a
+no-op, so cluster1 would advertise cluster2's range on the shared L2 segment.
 
 | IP              | Service                        | Set In                              |
 |-----------------|--------------------------------|-------------------------------------|
 | 172.18.255.200  | httpbin-lb (mc-demo, cluster1) | cross-cluster demo manifests        |
+| 172.18.255.201  | Act 1 north-south Gateway (cluster1) | `07-istio-advanced/act1-gateway/03-gateway.yaml` |
+| 172.18.255.202  | Act 3 east-west gateway (cluster1)  | `07-istio-advanced/act3-multicluster/01-...yaml` |
+| 172.18.255.203  | Act 4 agentgateway (cluster1)       | `07-istio-advanced/act4-ai-gateway/01-...yaml` |
+| 172.18.255.204  | Kiali (cluster1)                    | `07-istio-advanced/act5-observability/run.sh` |
 | 172.18.255.211  | kubeui-frontend                | `ui/k8s/kubeui.yaml`                |
 | 172.18.255.212  | sympozium-apiserver (UI)       | `sympozium-lb-setup.sh`             |
 | 172.18.255.213  | cluster2-agent (Sympozium)     | `sympozium-lb-setup.sh`             |
 | 172.18.255.214  | target-cluster-agent (Sympozium) | `sympozium-lb-setup.sh`           |
 | 172.18.255.215  | target-cluster API server      | `03-target-cluster/target-cluster.yaml` |
-| 172.18.255.216  | target-cluster-nginx proxy     | cross-cluster demo                  |
+| 172.18.255.216  | target-cluster-nginx proxy (legacy `05-istio` demo, allocated only while it runs) | cross-cluster demo |
 | 172.18.255.217  | security-agent                 | `ui/k8s/security-agent.yaml`        |
 | 172.18.255.218  | cost-analyzer (Sympozium)      | `sympozium-lb-setup.sh`             |
 | 172.18.255.219  | incident-responder (Sympozium) | `sympozium-lb-setup.sh`             |
 | 172.18.255.220  | host-ollama-lb (optional)      | `snippets/host-ollama/` (`WITH_LB=1`) |
+| 172.18.255.221  | Act 3 east-west gateway (cluster2) | `07-istio-advanced/act3-multicluster/02-...yaml` |
+
+**Note:** `.221` is outside the cluster2 pool as originally configured (`.211-.220`).
+`07-istio-advanced` widens that pool to `.211-.225` rather than reusing `.216`, which the
+legacy `05-istio` cross-cluster demo claims for its nginx proxy — double-booking it would
+make the two demos mutually exclusive.
 
 **Critical:** Never reassign the IPs above without updating the corresponding source file AND `sympozium-lb-setup.sh` AND `run-ui.sh`.
 
@@ -285,12 +305,49 @@ The UI is deployed to the `kubeui` namespace on cluster2 (`ui/k8s/kubeui.yaml`):
 - `target-cluster-kubeconfig` is a plain file in the repo root — used by `make istio` and verification scripts
 - If Sympozium serving Services aren't reachable, run `make sympozium-lb` to (re)patch them to LoadBalancer
 - `target-cluster-agent`'s tools reach the target cluster via the `sympozium-system/target-cluster-kubeconfig` Secret (mounted by the `target-k8s-ops` SkillPack). The target CA changes on every redeploy, so a stale Secret makes the agent's `kubectl` fail TLS (`x509: unknown authority`) **silently** — llama3.2 then confabulates plausible namespace output. `06-sympozium/refresh-target-kubeconfig.sh` re-syncs it and is auto-invoked by `04-verify/verify-cluster.sh` (`make verify`), the UI deploy (`cluster_deploy.go`), and the warm-pool claim (`pool.go`). Detect staleness by comparing the CA sha of the Secret vs `target-cluster-kubeconfig`; verify reach **deterministically** (never trust the model) with a pod in `sympozium-system` mounting the Secret and running `KUBECONFIG=/etc/target-kube/kubeconfig kubectl get ns`.
+- **FIXED UPSTREAM in 0.10.47.** The web-proxy now runs correctly with
+  `readOnlyRootFilesystem: true` (verified: both serving pods `1/1 Running`, 0 restarts,
+  under exactly the condition that used to crash them). `fix-web-proxy-rootfs.sh` is
+  retirable. Original 0.10.38 description follows.
 - Sympozium's `web-proxy` image crashes forever under `readOnlyRootFilesystem: true` (exit 2, zero log output, every ~30s) — the CRD has no securityContext override, so `install-sympozium.sh`/`demo-sympozium.sh` patch each `<instance>-web-endpoint-server` Deployment via `06-sympozium/fix-web-proxy-rootfs.sh` after applying. If a `SympoziumInstance` you add manually shows `0/1` endpoints and endless restarts, run that script against its Deployment.
 - The `sympozium-node-probe` DaemonSet (hostNetwork) checks `127.0.0.1:11434` to detect a local Ollama and populate `sympozium.ai/inference-*` node annotations (drives the Sympozium dashboard's Gateway/hardware view) — same host-vs-in-cluster reachability gap as the agent traffic path (see AI Integration section). Fix = an iptables OUTPUT DNAT rule (`127.0.0.1:11434` → `172.18.0.1:11434`) in the Kind node's netns, applied two ways: `06-sympozium/fix-node-probe-loopback.sh` (`make sympozium-fix-node-probe`, instant one-shot via `docker exec`) and `06-sympozium/node-probe-loopback-ds.yaml` (in the kustomize bundle; privileged hostPID DaemonSet that re-asserts the rule every 60s via `nsenter`, so it survives node-container/host restarts — the one-shot alone was lost on reboot and silently blanked the Gateway panel again).
 - The `sympozium-llmfit-daemon` (hardware view / model-fit in the Sympozium dashboard) detects NVIDIA GPUs by shelling out to `nvidia-smi`, which doesn't exist in its container (and couldn't run: no NVML lib, no `/dev/nvidia*` in the pod) — so the NVIDIA entry gets `vram=null` and the AMD iGPU (read from sysfs `mem_info_vram_total`, ~0.5Gi carve-out) is reported as the primary GPU instead. `install-sympozium.sh` runs `06-sympozium/fix-llmfit-nvidia-smi.sh` (`make sympozium-fix-llmfit-gpu`): it captures real answers from the host's `nvidia-smi`, writes a replay shim into the Kind node at `/opt/llmfit-shim/`, and mounts it into the daemon at `/usr/local/sbin` (NOT `/usr/local/bin` — that holds the `llmfit` binary). Shim values are static; re-run after node recreation or GPU/driver changes.
 - The Sympozium dashboard (172.18.255.212:8080) shows **no agents/runs/schedules/ensembles** until you switch its namespace picker (header dropdown) to `sympozium-system` — the frontend appends `?namespace=<localStorage sympozium_namespace>` to every API list call and defaults to `default`, where nothing lives. The choice persists in localStorage per browser; there is no server-side default-namespace knob (verified against the v0.10.38 apiserver binary). Console shortcut: `localStorage.setItem('sympozium_namespace','sympozium-system'); location.reload()`.
+- **The `web-endpoint` SkillPack hard-codes `web-proxy:latest`, a MUTABLE tag.** The
+  control plane is pinned but that tag is not, so it drifts to a newer web-proxy which
+  then crash-loops with **exit code 2 and zero log output**, ~every 30s, forever — never
+  binding :8080, with liveness/readiness reporting connection refused and nothing in
+  events or logs naming the cause. Observed at ~5,680 restarts before diagnosis. Fix:
+  `06-sympozium/fix-web-proxy-image.sh` (pins the sidecar to the installed chart
+  version, purges the node's cached `:latest` since `pullPolicy: IfNotPresent` would
+  reuse it, and deletes the serving AgentRuns so the controller regenerates the
+  Deployments). Re-run `./sympozium-lb-setup.sh` afterwards — regenerated Services come
+  back as ClusterIP and lose their MetalLB IPs.
+- **Upgrading the Sympozium chart:** apply the `sympozium-crds` chart first (Helm never
+  upgrades CRDs in `crds/`), then `helm upgrade --server-side=true --force-conflicts`.
+  Note `--server-side=true` **with a value** — Helm 4 made the flag take an argument, so
+  a bare `--server-side --force-conflicts` fails with `invalid/unknown release
+  server-side apply method: --force-conflicts`. `--force-conflicts` is required because
+  the controller mutates its own built-in SkillPacks (`spec.sidecar.mountWorkspace`).
+- **The "helm install silently drops built-in SkillPacks" pitfall is an admission race,
+  not a drop.** Revision 1 of this release recorded: `failed calling webhook
+  "vskillpack.sympozium.ai": dial tcp ...: connection refused` — the chart applies its
+  SkillPacks before its own validating webhook is serving. On the 0.10.47 upgrade, with
+  the webhook already running, all 11 SkillPacks landed with nothing missing.
 - `make pre-pull` dramatically speeds up VM provisioning by pre-loading the container disk on Kind nodes
 - `06-sympozium/labs/` — hands-on labs for each Sympozium capability (serving API, AgentRun, schedules, policies, MCP tools, ensembles, model fit); see `labs/README.md`. **Load-bearing finding from these labs:** `SympoziumInstance` has no controller reconciling it on this installed version (0.10.38) — only the separate `Agent` CRD is. `cluster2-agent`/`target-cluster-agent` work because they have both objects sharing a name; any new agent needs an `Agent` CR (not just a `SympoziumInstance`) or `AgentRun`/`SympoziumSchedule` reference to it fails admission. This affects how "Architecture Constraints" rule #4/#7 in `Sovereign_Cloud_Agentic_Strategy.md` (which assume `SympoziumInstance.spec.policyRef` binds policy) actually get satisfied in practice — `policyRef` must live on the `Agent` object to take effect. **Both agents are now committed as `Agent` CRs** (in `06-sympozium/{cluster2-agent,target-cluster-agent}.yaml`, alongside the kept `SympoziumInstance` which kubeui's dropdown lists), carrying model, `policyRef`, the environment briefing (`spec.memory.systemPrompt`), and `skills: [web-endpoint]`. **Declarative serving:** `web-endpoint` SkillPack has `sidecar.requiresServer: true`, so listing it in the Agent's `spec.skills` makes the AgentRun controller create the `mode: server` run + `<name>-web-endpoint-server` Deployment — no SympoziumInstance needed (on the migrated cluster a legacy Instance-owned serving run of the same name exists; the controller respects it, no duplicate). So `make sympozium-install` on a clean cluster now stands up briefed, serving agents unaided.
+- **SUPERSEDED (was true on 0.10.38; the cluster now runs 0.10.47).** On 0.10.47 the
+  apiserver DOES copy an Agent's `spec.skills` onto runs it creates, so the fix is to
+  declare tool SkillPacks on the `Agent` CR — which `06-sympozium/{cluster2-agent,
+  target-cluster-agent}.yaml` now do (`k8s-ops` / `target-k8s-ops` alongside
+  `web-endpoint`). **The upgrade briefly made this worse before it made it better:**
+  with only `web-endpoint` declared, chat runs got a non-empty `spec.skills` containing
+  just a serving sidecar, which a `task`-mode run ignores — and non-empty meant the
+  `skills-webhook`'s "inject only when `spec.skills` is empty" guard never fired, so
+  pods came up with no tool sidecar at all. The `skills-webhook` is now redundant and
+  can be retired; it is still deployed and harmlessly no-ops. Verified after the fix: a
+  `POST /api/v1/runs` chat run returned the real node name `cluster2-control-plane`.
+  Original 0.10.38 description follows.
 - **Chat/dashboard AgentRuns get no skill sidecar, so tool calls silently go nowhere** ("It seems there might be an issue with the skill sidecar..." is the model giving up, not a real sidecar crash). Root cause: `POST /api/v1/runs` (what the dashboard chat and kubeui's `/api/ai/chat` proxy both create runs through) never sets `spec.skills` — nothing in 0.10.38 propagates an agent's tools into runs spawned on its behalf. A run without `spec.skills` gets only the `agent` + `ipc-bridge` containers, no `k8s-ops` sidecar to execute `kubectl`/`virtctl`. Fixed by `06-sympozium/skills-webhook/`: a mutating admission webhook (`MutatingWebhookConfiguration agentrun-skills-injector`, `failurePolicy: Ignore`) that patches `spec.skills` onto CREATEd AgentRuns when `spec.mode == "task"` and `spec.skills` is empty, choosing the SkillPack **per agent** via `INJECT_SKILL_MAP` (default `cluster2-agent=k8s-ops,target-cluster-agent=target-k8s-ops`). `cluster2-agent` gets `k8s-ops` (in-cluster SA → cluster2 API); `target-cluster-agent` gets `target-k8s-ops` (mounts the `target-cluster-kubeconfig` Secret → reaches *inside* the target k3s cluster at `172.18.255.215:6443`). Deploy: `06-sympozium/skills-webhook/build-and-deploy.sh` (builds the Go binary + image, `kind load docker-image` into cluster2, applies `deploy.yaml`; TLS via a self-signed cert-manager `Issuer`+`Certificate`, CA auto-injected via `cert-manager.io/inject-ca-from`). Verified: a `curl POST /api/v1/runs` with no `skills` field came back with real `kubectl get nodes` output instead of the sidecar-error text. Separately, weaker local models (llama3.2) can still emit a malformed tool call as raw text even with the sidecar present — that's the existing 7B tool-calling limitation, not this bug.
 - **STALE as of a from-scratch rebuild against the currently-published chart**: `sympoziuminstances.sympozium.ai` is no longer shipped as a CRD at all (verified absent on chart versions 0.10.38 through 0.10.47 pulled fresh from `https://deploy.sympozium.ai/charts`) — applying one now fails admission outright (`no matches for kind "SympoziumInstance"`). The `SympoziumInstance` documents in `cluster2-agent.yaml`/`target-cluster-agent.yaml` referenced above have been removed; only the `Agent` CRs remain. kubeui's agent dropdown (`ui/backend/handlers/ai.go` `HandleListAgents`) still queries the (now-nonexistent) CRD, gets an error, and falls back to listing just `SYMPOZIUM_DEFAULT_AGENT` — functional but no longer auto-discovers other agents. `install-sympozium.sh` pins `--version 0.10.38` (`SYMPOZIUM_CHART_VERSION`) since that's the version everything else in this doc was verified against; going to `latest` is otherwise fine (KubeVirt/CDI/CAPI were all bumped to current-latest in the same rebuild with no issues) but chart upgrades should be re-verified against this file before trusting it blind.
 - **`helm install sympozium` silently drops some of the chart's built-in `SkillPack` resources** (kind: SkillPack, labeled `sympozium.ai/builtin: "true"` — observed: `web-endpoint`, `k8s-ops`, `code-review`, `incident-response`, `llmfit`, `memory`, `sre-observability`, `subagents`) even on a clean install with `--wait` reporting success and `helm get manifest` showing them as part of the release. Other kinds in the same chart (`SympoziumPolicy`, etc.) were not observed to be affected. Symptom: an `Agent` with `skills: [{skillPackRef: web-endpoint}]` gets an `AgentRun` stuck `Failed` with `"no sidecar with requiresServer=true found"` — no `<name>-web-endpoint-server` Deployment ever appears, so `sympozium-lb-setup.sh` has nothing to expose and the AI tab has no serving endpoint to call. Fixed by `06-sympozium/fix-missing-builtin-skillpacks.sh` (auto-run by `install-sympozium.sh` as step `2a/5`): diffs `helm get manifest`'s builtin-labeled SkillPacks against what's actually in-cluster and re-applies whatever is missing; idempotent. After it runs, delete any AgentRuns stuck `Failed` from before the SkillPack existed (`kubectl delete agentrun <name>-web-endpoint -n sympozium-system`) so the controller recreates them — it does not retry a terminal `Failed` run on its own.
