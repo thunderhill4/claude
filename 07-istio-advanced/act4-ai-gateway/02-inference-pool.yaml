@@ -1,0 +1,33 @@
+# Act 4 tier 2 — Gateway API Inference Extension (EXPERIMENTAL).
+#
+# Applied only if the GIE CRDs are installed; run.sh checks first.
+#
+# READ THE LIMITATION BEFORE DEMOING THIS:
+#   An InferencePool is normally backed by model-server Pods that export
+#   scheduling metrics (KV-cache utilization, queue depth) which the Endpoint
+#   Picker uses to route. vLLM and Triton export those; Ollama does not, and here
+#   the model server is not even in-cluster — it is the host's Ollama behind a
+#   Service shim. So this shows the routing API surface, not genuine load-aware
+#   scheduling. Say that out loud rather than implying smart routing is happening.
+apiVersion: inference.networking.k8s.io/v1
+kind: InferencePool
+metadata:
+  name: ollama-pool
+  namespace: ai-gateway
+spec:
+  targetPortNumber: 11434
+  selector:
+    app: host-ollama
+  extensionRef:
+    name: ollama-epp
+---
+apiVersion: inference.networking.k8s.io/v1alpha2
+kind: InferenceObjective
+metadata:
+  name: ollama-objective
+  namespace: ai-gateway
+spec:
+  modelName: qwen3.5:4b
+  criticality: Standard
+  poolRef:
+    name: ollama-pool

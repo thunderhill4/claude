@@ -1,0 +1,26 @@
+# The negative case, and the most persuasive part of Act 1.
+#
+# rogue-tenant is labeled demo.istio.local/role: untrusted, which does not match
+# the Gateway listener's allowedRoutes selector. Applying this SUCCEEDS at the
+# API level — nothing rejects the YAML — but the Gateway refuses the attachment,
+# and the route reports:
+#
+#   status.parents[].conditions[type=Accepted].reason = NotAllowedByListeners
+#
+# That is the point: the platform team's policy holds even though the app team
+# has full write access to its own namespace.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rogue-hijack
+  namespace: rogue-tenant
+spec:
+  parentRefs:
+    - name: edge
+      namespace: gateway-infra
+      sectionName: https
+  hostnames: ["echo.demo.istio.local"]
+  rules:
+    - backendRefs:
+        - name: echo-v2
+          port: 80

@@ -1,0 +1,108 @@
+# Two versions of one service, so Act 1 can demo canary + header routing and
+# Act 2 can reuse them for an in-mesh traffic split.
+#
+# `echoserver` returns the pod name and request headers, which is what makes the
+# canary split and the XFCC header in Act 2 observable without extra tooling.
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: demo-apps
+  labels: {app: echo}
+spec:
+  selector: {app: echo}
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      appProtocol: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-v1
+  namespace: demo-apps
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: echo, version: v1}}
+  template:
+    metadata:
+      labels: {app: echo, version: v1}
+    spec:
+      serviceAccountName: echo
+      containers:
+        - name: echo
+          image: registry.k8s.io/echoserver:1.10
+          ports: [{containerPort: 8080}]
+          env: [{name: VERSION, value: v1}]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: echo-v2
+  namespace: demo-apps
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: echo, version: v2}}
+  template:
+    metadata:
+      labels: {app: echo, version: v2}
+    spec:
+      serviceAccountName: echo
+      containers:
+        - name: echo
+          image: registry.k8s.io/echoserver:1.10
+          ports: [{containerPort: 8080}]
+          env: [{name: VERSION, value: v2}]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: echo, namespace: demo-apps}
+---
+# Version-specific Services so HTTPRoute can address v1/v2 independently.
+apiVersion: v1
+kind: Service
+metadata: {name: echo-v1, namespace: demo-apps, labels: {app: echo, version: v1}}
+spec:
+  selector: {app: echo, version: v1}
+  ports: [{name: http, port: 80, targetPort: 8080, appProtocol: http}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: echo-v2, namespace: demo-apps, labels: {app: echo, version: v2}}
+spec:
+  selector: {app: echo, version: v2}
+  ports: [{name: http, port: 80, targetPort: 8080, appProtocol: http}]
+---
+# Mirror sink: receives mirrored traffic so Act 1 can prove mirroring happened
+# by reading this deployment's logs.
+apiVersion: v1
+kind: Service
+metadata: {name: echo-mirror, namespace: demo-apps, labels: {app: echo-mirror}}
+spec:
+  selector: {app: echo-mirror}
+  ports: [{name: http, port: 80, targetPort: 8080, appProtocol: http}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: echo-mirror, namespace: demo-apps}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: echo-mirror}}
+  template:
+    metadata:
+      labels: {app: echo-mirror}
+    spec:
+      containers:
+        - name: echo
+          image: registry.k8s.io/echoserver:1.10
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {memory: 128Mi}

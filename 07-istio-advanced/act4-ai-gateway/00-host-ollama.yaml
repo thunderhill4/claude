@@ -1,0 +1,38 @@
+# Shim Service for the host's Ollama, reachable from cluster1 pods.
+#
+# Reuses the pattern proven in 06-sympozium/host-ollama-service.yaml: a Service
+# with hand-written Endpoints pointing at the Docker bridge gateway. Using host
+# Ollama instead of in-cluster model pods keeps ~4GB of RAM per replica free,
+# which matters given cluster2 is already carrying KubeVirt VMs.
+#
+# Note this is NOT `host.docker.internal` — that does not resolve from Kind pods.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-gateway
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: host-ollama
+  namespace: ai-gateway
+spec:
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      protocol: TCP
+      appProtocol: http
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: host-ollama
+  namespace: ai-gateway
+subsets:
+  - addresses:
+      - ip: 172.18.0.1
+    ports:
+      - name: http
+        port: 11434
+        protocol: TCP

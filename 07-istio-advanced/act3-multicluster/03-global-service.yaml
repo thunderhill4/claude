@@ -1,0 +1,23 @@
+# Marking a Service global is the ENTIRE cross-cluster config. No ServiceEntry,
+# no manual endpoint lists, no MetalLB IP hardcoded into a manifest — contrast
+# with 05-istio/cross-cluster-demo.sh, which needs all three.
+#
+# With this label, istiod programs each cluster's ztunnel with the remote
+# endpoints, reached via the peer's east-west gateway. Local endpoints are
+# preferred; remote ones are used when no healthy local endpoint exists, which is
+# what makes the scale-to-zero failover work with no config change.
+apiVersion: v1
+kind: Service
+metadata:
+  name: echo
+  namespace: demo-apps
+  labels:
+    app: echo
+    istio.io/global: "true"
+spec:
+  selector: {app: echo}
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      appProtocol: http

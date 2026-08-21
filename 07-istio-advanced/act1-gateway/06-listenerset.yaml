@@ -1,0 +1,35 @@
+# ListenerSet — new in Gateway API v1.5, reported in Gateway status by Istio 1.30.
+#
+# Naming note: this graduated from XListenerSet (gateway.networking.x-k8s.io) to
+# ListenerSet (gateway.networking.k8s.io/v1) in v1.5. Most blog posts and the
+# Istio 1.30 release notes still say "XListenerSet"; applying that kind against
+# v1.5.1 fails with "no matches for kind". Verified against the live CRD.
+#
+# The problem it solves: without it, every tenant hostname/listener must be added
+# to the single Gateway object, so the platform team becomes a bottleneck and one
+# tenant's bad listener can invalidate the whole Gateway. An XListenerSet lets a
+# tenant contribute listeners from THEIR namespace, attached to the platform
+# team's Gateway, governed by allowedListeners.
+#
+# Requires the Gateway to opt in via spec.allowedListeners (patched by run.sh).
+apiVersion: gateway.networking.k8s.io/v1
+kind: ListenerSet
+metadata:
+  name: tenant-listeners
+  namespace: demo-apps
+spec:
+  parentRef:
+    name: edge
+    namespace: gateway-infra
+    kind: Gateway
+    group: gateway.networking.k8s.io
+  listeners:
+    - name: tenant-a
+      protocol: HTTPS
+      port: 8443
+      hostname: "tenant-a.demo.istio.local"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: echo-tls
+            namespace: gateway-infra

@@ -1,0 +1,75 @@
+# HTTPRoutes owned by the app team, in demo-apps. The platform team's Gateway
+# lives in gateway-infra and never changes as these evolve.
+#
+# Weighted canary: 90/10 across two backend Services.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-canary
+  namespace: demo-apps
+spec:
+  parentRefs:
+    - name: edge
+      namespace: gateway-infra
+      sectionName: https
+  hostnames: ["echo.demo.istio.local"]
+  rules:
+    # Rule order matters: the header match must come first, or the catch-all
+    # canary rule below would swallow internal traffic too.
+    - matches:
+        - headers:
+            - name: x-demo-user
+              value: internal
+      backendRefs:
+        - name: echo-v2
+          port: 80
+    - matches:
+        - path: {type: PathPrefix, value: /}
+      backendRefs:
+        - name: echo-v1
+          port: 80
+          weight: 90
+        - name: echo-v2
+          port: 80
+          weight: 10
+      filters:
+        # Mirror a copy of every request to echo-mirror. The client never sees
+        # the mirrored response; prove it happened by reading echo-mirror logs.
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: echo-mirror
+              port: 80
+      timeouts:
+        request: 5s
+        backendRequest: 2s
+    - matches:
+        - path: {type: PathPrefix, value: /flaky}
+      backendRefs:
+        - name: echo-v1
+          port: 80
+      retry:
+        # Gateway API native retry (HTTPRoute.rules.retry), not a VirtualService.
+        attempts: 3
+        backoff: 100ms
+        codes: [502, 503, 504]
+---
+# Plain HTTP listener -> permanent redirect to HTTPS. Shows a filter that needs
+# no backend at all.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: echo-https-redirect
+  namespace: demo-apps
+spec:
+  parentRefs:
+    - name: edge
+      namespace: gateway-infra
+      sectionName: http
+  hostnames: ["echo.demo.istio.local"]
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301

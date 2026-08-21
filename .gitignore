@@ -2,3 +2,4 @@ target-cluster-kubeconfig
 .worktrees/
 ui/dist/
 06-sympozium/skills-webhook/webhook
+07-istio-advanced/.certs/

@@ -1,0 +1,38 @@
+# East-west gateway for cluster1.
+#
+# A plain Gateway API object with the dedicated istio-east-west class — not a
+# Deployment, not an IstioOperator component. Istio provisions the proxy behind
+# it, same as the Act 1 edge gateway.
+#
+# Port 15008 is HBONE, Istio's mTLS tunnel protocol.
+#
+# The tls block is NOT the usual Terminate + certificateRefs. An east-west
+# gateway presents Istio's own workload identity, so it takes
+# `options: gateway.istio.io/tls-terminate-mode: ISTIO_MUTUAL` instead.
+# Supplying certificateRefs here fails admission:
+#   "certificateRefs or options must be specified when mode is Terminate"
+# Terminate + ISTIO_MUTUAL is what gives DOUBLE HBONE: the workload's own mTLS
+# session is tunneled inside the gateway-to-gateway mTLS session, so the gateway
+# never sees plaintext and is not a trust boundary needing re-authorization.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: istio-eastwest
+  namespace: istio-system
+  annotations:
+    metallb.io/loadBalancerIPs: "172.18.255.202"
+  labels:
+    topology.istio.io/network: network1
+spec:
+  gatewayClassName: istio-east-west
+  listeners:
+    - name: mesh
+      port: 15008
+      protocol: HBONE
+      tls:
+        mode: Terminate
+        options:
+          gateway.istio.io/tls-terminate-mode: ISTIO_MUTUAL
+      allowedRoutes:
+        namespaces:
+          from: All

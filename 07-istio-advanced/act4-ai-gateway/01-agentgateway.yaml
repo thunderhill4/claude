@@ -1,0 +1,47 @@
+# Act 4 tier 1 — agentgateway as a Gateway API implementation.
+#
+# gatewayClassName: istio-agentgateway swaps the data plane from Envoy to
+# agentgateway, a proxy purpose-built for AI/agent traffic (MCP, LLM protocols)
+# rather than general HTTP. Same Gateway API object, different backing proxy.
+#
+# EXPERIMENTAL in Istio 1.30: requires PILOT_ENABLE_AGENTGATEWAY=true, which
+# 01-install/istio-values-cluster1.yaml sets at install time.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ai-edge
+  namespace: ai-gateway
+  annotations:
+    metallb.io/loadBalancerIPs: "172.18.255.203"
+spec:
+  gatewayClassName: istio-agentgateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# Route the OpenAI-compatible surface to host Ollama. Once this works, the same
+# endpoint the Sympozium agents already speak (/v1/chat/completions) is reachable
+# through the mesh, with mesh policy and telemetry applying to model traffic.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ollama
+  namespace: ai-gateway
+spec:
+  parentRefs:
+    - name: ai-edge
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /}
+      backendRefs:
+        - name: host-ollama
+          port: 11434
+      timeouts:
+        # Model calls are slow; a cold 7B on CPU can take ~30s (see the Kind
+        # host-Ollama note in CLAUDE.md). The Gateway API default would cut it off.
+        request: 300s
+        backendRequest: 300s

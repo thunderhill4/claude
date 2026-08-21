@@ -1,0 +1,52 @@
+# Sovereign-friendly TLS: a self-signed local root, no external ACME/CA.
+# Deliberately separate from the mesh CA in 01-install/gen-mesh-ca.sh — that one
+# signs workload identities (mTLS between pods); this one signs the public-facing
+# server certificate the browser/curl validates. Conflating them is a common
+# mistake and makes rotation stories confusing.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: selfsigned-bootstrap
+  namespace: gateway-infra
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: demo-root-ca
+  namespace: gateway-infra
+spec:
+  isCA: true
+  commonName: demo.istio.local Root CA
+  secretName: demo-root-ca
+  duration: 87600h    # 10y
+  privateKey: {algorithm: ECDSA, size: 256}
+  issuerRef: {name: selfsigned-bootstrap, kind: Issuer, group: cert-manager.io}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: demo-ca
+  namespace: gateway-infra
+spec:
+  ca:
+    secretName: demo-root-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: echo-tls
+  namespace: gateway-infra
+spec:
+  secretName: echo-tls
+  commonName: echo.demo.istio.local
+  dnsNames:
+    - echo.demo.istio.local
+    - "*.demo.istio.local"
+  # Short-lived on purpose: makes live rotation demo-able in minutes rather than
+  # months. cert-manager renews at 2/3 of duration unless renewBefore says sooner.
+  duration: 1h
+  renewBefore: 55m
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+  issuerRef: {name: demo-ca, kind: Issuer, group: cert-manager.io}

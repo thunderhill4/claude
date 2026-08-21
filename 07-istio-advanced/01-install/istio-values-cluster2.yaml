@@ -1,0 +1,28 @@
+# Istio 1.30 — ambient profile, cluster2.
+#
+# Every multicluster-relevant knob here is INSTALL-TIME. Act 3 cannot add
+# meshID / clusterName / network / AMBIENT_ENABLE_MULTI_NETWORK later without a
+# reinstall that reissues every workload cert. They are set now, on purpose,
+# even though multicluster is not demoed until Act 3.
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: istio-ambient-cluster2
+spec:
+  profile: ambient
+  values:
+    global:
+      meshID: mesh1
+      network: network2
+      multiCluster:
+        clusterName: cluster2
+    pilot:
+      env:
+        # Ambient multi-network multicluster (Beta since 1.29). Also required
+        # for TLS-passthrough listeners on east-west gateways in Act 3.
+        AMBIENT_ENABLE_MULTI_NETWORK: "true"
+        # Act 4 runs on cluster1 only, but keeping the flag symmetric avoids a
+        # reinstall if the agentgateway demo is later moved here.
+        PILOT_ENABLE_AGENTGATEWAY: "true"
+        # Richer ambient telemetry for Act 5's Kiali graph.
+        AMBIENT_ENABLE_BAGGAGE: "true"

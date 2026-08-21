@@ -1,0 +1,37 @@
+# Act 2 — L7 authorization AT THE WAYPOINT.
+#
+# This is what ambient cannot do without a waypoint. ztunnel is L4 only: it can
+# enforce "which identity may talk to which service", but it cannot see HTTP
+# paths or methods. The waypoint is an Envoy that terminates HBONE and applies
+# L7 rules — added per namespace, with no sidecar injected into any pod and no
+# application restart.
+#
+# Policy targets the waypoint via targetRefs (Gateway), NOT a selector. A
+# selector-based policy would attach to workloads and be enforced by ztunnel at
+# L4, silently ignoring the L7 rules below. This is the single easiest thing to
+# get wrong in ambient authz.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: echo-l7
+  namespace: demo-apps
+spec:
+  targetRefs:
+    - kind: Gateway
+      group: gateway.networking.k8s.io
+      name: waypoint
+  action: ALLOW
+  rules:
+    # Only the 'trusted' service account may reach /secure, and only via GET.
+    - from:
+        - source:
+            principals: ["cluster.local/ns/demo-apps/sa/trusted"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/secure*"]
+    # Everything else on the service is open to any mesh identity, so the demo
+    # can show a 403 that is specific to the path rather than a blanket deny.
+    - to:
+        - operation:
+            paths: ["/", "/headers*", "/public*"]

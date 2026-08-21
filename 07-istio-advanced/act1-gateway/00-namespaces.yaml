@@ -1,0 +1,30 @@
+# Act 1's ownership split, the thing that actually sells Gateway API:
+# the platform team owns the Gateway; app teams own their HTTPRoutes.
+#
+#   gateway-infra : platform team. Owns the Gateway + TLS listener.
+#   demo-apps     : app team. Owns HTTPRoutes. Explicitly allowed to attach.
+#   rogue-tenant  : NOT allowed to attach. Its route is rejected by the Gateway,
+#                   and that rejection is visible in Gateway/HTTPRoute status.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway-infra
+  labels:
+    demo.istio.local/role: platform
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-apps
+  labels:
+    demo.istio.local/role: application
+    # Act 2 enrolls this namespace into ambient; declared here so Acts 1 and 2
+    # share one namespace and the waypoint can be added without redeploying.
+    istio.io/dataplane-mode: ambient
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rogue-tenant
+  labels:
+    demo.istio.local/role: untrusted

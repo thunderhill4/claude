@@ -1,0 +1,43 @@
+# The Gateway itself. Note what is NOT here: no Deployment, no Service, no Helm
+# chart. Istio's gateway controller sees gatewayClassName: istio and provisions
+# the Envoy Deployment + Service automatically. That is the Act 1 "wow".
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: edge
+  namespace: gateway-infra
+  annotations:
+    # Istio copies annotations from the Gateway onto the Service it generates.
+    # MetalLB reads this one. (loadBalancerIP is deprecated since k8s 1.24, and
+    # Gateway API spec.addresses is not consistently honored for LB IP pinning,
+    # so the MetalLB annotation is the reliable path.)
+    metallb.io/loadBalancerIPs: "172.18.255.201"
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              demo.istio.local/role: application
+    - name: https
+      protocol: HTTPS
+      port: 443
+      hostname: "*.demo.istio.local"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: echo-tls
+      # THE OWNERSHIP SPLIT: only namespaces labeled role=application may attach
+      # routes. rogue-tenant is labeled role=untrusted, so its HTTPRoute is
+      # rejected with NotAllowedByListeners — visible in the route's status.
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              demo.istio.local/role: application

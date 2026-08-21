@@ -1,0 +1,46 @@
+# Two clients with different SPIFFE identities. Same image, same namespace, same
+# network position — the ONLY difference is the ServiceAccount, and that is what
+# the waypoint's AuthorizationPolicy keys on.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: trusted, namespace: demo-apps}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: untrusted, namespace: demo-apps}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: client-trusted, namespace: demo-apps}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: client-trusted}}
+  template:
+    metadata: {labels: {app: client-trusted}}
+    spec:
+      serviceAccountName: trusted
+      containers:
+        - name: curl
+          image: curlimages/curl:8.11.1
+          command: ["sleep", "infinity"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: client-untrusted, namespace: demo-apps}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: client-untrusted}}
+  template:
+    metadata: {labels: {app: client-untrusted}}
+    spec:
+      serviceAccountName: untrusted
+      containers:
+        - name: curl
+          image: curlimages/curl:8.11.1
+          command: ["sleep", "infinity"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {memory: 64Mi}
