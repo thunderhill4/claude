@@ -10,10 +10,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYMPOZIUM_NS="${SYMPOZIUM_NAMESPACE:-sympozium-system}"
 CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.16.2}"
-# Pinned to the version these manifests/labs were verified against: newer
-# chart releases dropped the SympoziumInstance CRD that
-# 06-sympozium/cluster2-agent.yaml and target-cluster-agent.yaml still apply.
-SYMPOZIUM_CHART_VERSION="${SYMPOZIUM_CHART_VERSION:-0.10.38}"
+# Pinned to the version these manifests/labs are verified against.
+# Upgraded 0.10.38 -> 0.10.47 (2026-08-21). The old pin's rationale (newer
+# charts dropped the SympoziumInstance CRD) no longer applies: the
+# SympoziumInstance objects were removed from cluster2-agent.yaml and
+# target-cluster-agent.yaml, which now carry only Agent CRs.
+SYMPOZIUM_CHART_VERSION="${SYMPOZIUM_CHART_VERSION:-0.10.47}"
 
 # LLM credentials. For Ollama-compatible endpoints that don't require auth,
 # any non-empty value works. Override LLM_API_KEY if using OpenAI/Anthropic.
@@ -39,8 +41,29 @@ helm repo update sympozium
 # (e.g. web-endpoint.spec.sidecar.mountWorkspace) after install. Helm upgrade
 # then conflicts. Only run install if the release doesn't exist yet.
 if helm status sympozium -n "$SYMPOZIUM_NS" &>/dev/null; then
-    echo "Helm release 'sympozium' already exists in $SYMPOZIUM_NS, skipping install."
-    echo "To force a re-install: helm uninstall sympozium -n $SYMPOZIUM_NS"
+    CURRENT_VER="$(helm list -n "$SYMPOZIUM_NS" -f '^sympozium$' -o json 2>/dev/null \
+                   | sed -n 's/.*"chart":"sympozium-\([^"]*\)".*/\1/p')"
+    echo "Helm release 'sympozium' already exists (chart ${CURRENT_VER:-unknown}), skipping install."
+    if [[ -n "$CURRENT_VER" && "$CURRENT_VER" != "$SYMPOZIUM_CHART_VERSION" ]]; then
+        echo ""
+        echo "  WARNING: installed chart ${CURRENT_VER} != pinned ${SYMPOZIUM_CHART_VERSION}."
+        echo "  This script does NOT upgrade in place. Helm never upgrades CRDs in crds/,"
+        echo "  and the controller mutates its own built-in SkillPacks after install"
+        echo "  (spec.sidecar.mountWorkspace), so a plain 'helm upgrade' conflicts."
+        echo "  To upgrade, apply the CRDs first, then upgrade server-side:"
+        echo ""
+        echo "    helm template sympozium-crds sympozium/sympozium-crds \\"
+        echo "      --version $SYMPOZIUM_CHART_VERSION | kubectl apply --server-side --force-conflicts -f -"
+        echo "    helm upgrade sympozium sympozium/sympozium --version $SYMPOZIUM_CHART_VERSION \\"
+        echo "      -n $SYMPOZIUM_NS -f $SCRIPT_DIR/values.yaml \\"
+        echo "      --server-side=true --force-conflicts --wait --timeout 12m"
+        echo ""
+        echo "  Note --server-side=true (with a value): Helm 4 made --server-side take an"
+        echo "  argument, so a bare '--server-side --force-conflicts' fails with"
+        echo "  'invalid/unknown release server-side apply method: --force-conflicts'."
+        echo "  Afterwards, pin the web-proxy sidecar (see fix-web-proxy-image.sh)."
+        echo ""
+    fi
 else
     helm install sympozium sympozium/sympozium \
         --version "$SYMPOZIUM_CHART_VERSION" \

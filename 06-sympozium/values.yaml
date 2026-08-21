@@ -27,5 +27,13 @@ controller:
   replicas: 1
 
 # NATS event bus (bundled). Leave defaults unless cluster has resource limits.
+
 nats:
   enabled: true
+# GPU/DRA subchart, new and enabled-by-default as of 0.10.47. Disabled here to
+# keep the 0.10.38 -> 0.10.47 upgrade's blast radius on the control plane only.
+# The Kind node passes /dev/nvidia* through but has no nvidia-smi / NVML (see
+# fix-llmfit-nvidia-smi.sh), so DRA device discovery has nothing to bind to.
+# Evaluate separately: helm upgrade ... --set llmfit-dra.enabled=true
+llmfit-dra:
+  enabled: false

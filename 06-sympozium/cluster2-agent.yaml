@@ -14,21 +14,30 @@
 # errors (see ui/backend/handlers/ai.go HandleListAgents), so this is safe to
 # drop.
 ---
-# The Agent CR is the object the Sympozium controller actually reconciles on
-# 0.10.38. Model, policy, the persistent environment briefing
-# (spec.memory.systemPrompt, injected into every run), and the web-endpoint
-# skill (which drives serving) must live here to take effect on 0.10.38.
+# The Agent CR is the object the Sympozium controller actually reconciles
+# (SympoziumInstance has no controller). Model, policy, the persistent
+# environment briefing (spec.memory.systemPrompt, injected into every run), and
+# the skills list must all live here to take effect.
 #
 # spec.skills = [web-endpoint] is what makes serving declarative: the AgentRun
 # controller sees the web-endpoint SkillPack's sidecar.requiresServer=true and
 # creates a mode=server AgentRun (`<name>-web-endpoint`) → a long-running
-# `<name>-web-endpoint-server` Deployment. No SympoziumInstance needed (on the
-# already-migrated cluster a legacy Instance-owned serving run of the same name
-# exists; the controller respects it and does not duplicate). TOOL skills
-# (k8s-ops / target-k8s-ops) are intentionally NOT listed here — chat runs
-# created via POST /api/v1/runs don't inherit an agent's skills on this version,
-# so the skills-webhook (06-sympozium/skills-webhook/) injects the right tool
-# SkillPack per run instead.
+# `<name>-web-endpoint-server` Deployment.
+#
+# TOOL SKILLS MUST BE LISTED HERE as of 0.10.47. This changed:
+#   - On 0.10.38, POST /api/v1/runs created AgentRuns with an EMPTY spec.skills,
+#     so the skills-webhook (06-sympozium/skills-webhook/) injected the right
+#     tool SkillPack per run. Tool skills were deliberately omitted here.
+#   - On 0.10.47 the apiserver copies the Agent's spec.skills onto runs it
+#     creates. With only [web-endpoint] listed, chat runs got a non-empty
+#     skills list containing just a serving sidecar (requiresServer=true, which
+#     a task-mode run ignores). Non-empty meant the webhook's "inject only when
+#     empty" guard never fired, so the pod came up with no tool sidecar at all
+#     and every tool call dead-ended with "the Kubernetes sidecar container is
+#     not currently running".
+# Listing k8s-ops here fixes it through the controller's own propagation.
+# Verified: a chat run returned the real node name `cluster2-control-plane`.
+# The skills-webhook is now redundant and can be retired.
 apiVersion: sympozium.ai/v1alpha1
 kind: Agent
 metadata:
@@ -48,6 +57,7 @@ spec:
       secret: llm-credentials
   skills:
     - skillPackRef: web-endpoint   # drives declarative serving (requiresServer=true)
+    - skillPackRef: k8s-ops        # kubectl/virtctl sidecar for task (chat) runs
   policyRef: sandbox-restricted
   observability:
     enabled: false
