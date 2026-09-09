@@ -97,7 +97,7 @@ make ui                 # launch web UI dev servers
 ### Cluster Lifecycle
 
 ```bash
-make target-cluster            # DEFAULT — WARM fast-path (parallel boot, ~40s target)
+make target-cluster            # DEFAULT — WARM fast-path (parallel boot, ~34.5s measured)
 make target-cluster-warm       # same warm fast-path, explicit
 make target-cluster-lite       # legacy lite, 2 CPU / 4Gi (sequential, :latest)
 make target-cluster-full       # legacy full, 4 CPU / 8Gi (sequential, :latest)
@@ -110,7 +110,28 @@ make clean                     # delete target cluster (CAPI cleans up VMs)
 It combines the parallel-boot worker (below) with a **warm-baked golden image** (`:warm`):
 the image carries fixed CAs + token (`03-target-cluster/warm-ca/`) so `scripts/seed-cluster-secrets.sh`
 can pre-seed matching CAPI secrets — KThrees adopts them, so first boot needs **no
-`--cluster-reset` and no cert purge**. Targets time-to-ready **<40s**. The Make target runs
+`--cluster-reset` and no cert purge**. **Measured time-to-ready: median 34.5s**
+(34.5 / 34.2 / 34.7, spread 0.5s) — the earlier "<40s target" in this file was an
+aspiration never met by the image work, and the warm image itself contributes **no**
+speedup over the plain parallel build (see `docs/sub-60s-cluster-strategy.md` §5-6;
+measured warm 48.5s vs parallel 46.6-50.0s). What actually moved the number was two
+one-line config fixes, neither of them an image change (50.0s -> 34.5s, -31%):
+
+1. **`advertise-address` on the control plane** (50.0s -> 42.7s). A KubeVirt VM's pod IP
+   is reachable from the node but **not from other pods**, so a worker whose agent is
+   handed the CP's pod IP burns a full 10.000s dial timeout — kubelet start is gated on
+   it — before falling back to the VIP. In all three target-cluster manifests.
+2. **`supportContainerResources` on the KubeVirt CR** (42.7s -> 34.5s). KubeVirt gives
+   the `volumesystemdisk` containerDisk container `cpu: 10m` and `guest-console-log`
+   `cpu: 15m` by default; CFS throttling then makes the launcher pod take ~8s to reach
+   qemu on every VM start. Raised to 1 core by `scripts/configure-kubevirt-perf.sh`
+   (`make kubevirt-perf`, auto-run from `02-capi-init/init-management-cluster.sh`).
+   **This is cluster state, not manifest state — re-run it after any cluster2 rebuild.**
+
+Use `./scripts/phase-timings.sh` (`make phase-timings`; per-phase breakdown, read-only,
+no SSH needed) rather than a single aggregate number when judging any change here — the
+run-to-run spread is now 0.5s, so regressions are visible, but both fixes above were
+invisible against the old 6.1s spread. The Make target runs
 `ensure-warm-image` first (pre-pulls the `:warm` image, baking it if absent). Fixed CA + token
 are committed — **demo use only**; safe only because exactly one `target-cluster` runs at a time.
 

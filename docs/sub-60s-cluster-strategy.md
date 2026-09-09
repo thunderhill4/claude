@@ -198,3 +198,183 @@ kubectl delete cluster target-cluster --ignore-not-found --wait=true
 ```
 
 Expected: ~130–150s total to `RESULT:` line. p95 over 5 runs will take ~15 min of wall time.
+
+---
+
+## 6. Phase-level measurement (2026-09-09) — instrumentation, and three dead ends
+
+Everything above was judged on a single aggregate number. `scripts/phase-timings.sh`
+(new) attributes the wall clock per phase, read-only and without SSH (the
+`v1.subresources.kubevirt.io` APIService is `Available=False` on this host, so
+`virtctl ssh/console` is unusable). Guest uptime is anchored to wall clock from
+cloud-init's own log lines, which carry an absolute date and the uptime together.
+
+### The real budget (warm path, median of 3 clean runs)
+
+```
+apply → VMI created            6.6s   14%   CAPI/CAPK/KThrees controller chain
+launcher pod → qemu running   10.0s   21%   8s of it is containerDisk unpack
+firmware + kernel + initramfs  3.7s    8%
+systemd + cloud-init → k3s     5.5s   12%
+CP k3s → first 200 /readyz     7.0s   15%
+worker join after API ready   11.8s   25%
+──────────────────────────────────────
+median total                  50.0s          (52.7 / 50.0 / 46.6)
+```
+
+**36% of the wall clock (16.6s) elapses before the guest kernel starts.** No
+image-side change can reach it. This is a third, independent reason the `:preinit`
+and `:warm` experiments could not have delivered what they promised.
+
+### Dead end 3 — gating the worker on CP readiness
+
+Hypothesis: the k3s agent starts at t+26.7s, the API first answers at t+34.8s, and the
+agent retries on a ~5s cycle, so it lands on the t+36.7s attempt — 1.9s of pure
+quantization loss. Fix: spin on `/readyz` (which answers unauthenticated) before
+starting the agent.
+
+**Result: 53.1s median, a 3.1s REGRESSION.** The premise was wrong. The journal shows
+the agent starts containerd *before* it fetches config, so the retry window is
+productive work overlapping CP boot. Delaying the agent serialized it. Reverted.
+
+### Dead end 4 — the `no route to host` dials
+
+KubeVirt bridge binding gives the guest the launcher pod's address *and* its /24, so
+the guest treats every pod IP as on-link and ARPs for it — but pod-to-pod on kindnet
+is L3-routed, not one L2 segment, so the ARP cannot resolve. The agent learns the CP's
+**pod** IP from the supervisor and dials it directly, taking `connect: no route to
+host` three times at ~3.1s each before falling back to the VIP. It also received a
+stale `10.0.2.2:6443` (the QEMU slirp gateway) baked into the warm datastore.
+
+Routing the pod CIDR via the gateway fixes it completely: 6 errors → 0, one clean dial,
+one apiserver address. **Timing benefit: none (54.3s median).** The journal shows why —
+between `"Running kubelet --address=0.0.0.0"` and the kubelet's first output there is a
+**10s silent gap**, and the failed dials were running *concurrently inside* it, not
+adding to it. A real bug, worth keeping for correctness; not a speedup.
+
+### Fixed: workers were starting the k3s SERVER unit
+
+The worker bootstrap passed the mode as `INSTALL_K3S_EXEC='agent'`, but the baked
+`/opt/install.sh` parses only positional args and ignores the env var, so it defaulted
+to server. `k3s server` failed ~0.8s later and, because install.sh runs under `set -e`,
+aborted the script before writing the `bootstrap-success.complete` sentinel (harmless
+only because `virtualMachineBootstrapCheck.checkStrategy: none` is set). Fixed by
+passing `agent` positionally. Verified: `Mode: k3s-agent`, zero `k3s.service` failures.
+
+### FIXED: the 10s kubelet gap — 50.0s -> 42.7s
+
+Debug logging on the agent named it exactly:
+
+```
+Dial error from server 10.244.0.186:6443@UNCHECKED after 10.000162522s: i/o timeout
+```
+
+A **10.000s TCP dial timeout**, with the kubelet's first log line landing 7ms after it
+expires — kubelet start is gated on the agent's tunnel dial. The address being dialled
+is the **control plane's pod IP**, handed to the worker by the supervisor's apiserver
+endpoint list. And that address cannot work:
+
+```
+node -> CP VM pod IP:6443   =  200, connect 0.0003s
+pod  -> CP VM pod IP:6443   =  timeout
+```
+
+**A KubeVirt VM's pod address is reachable from the node but not from other pods.** The
+worker's k3s agent runs inside a pod, so it can never reach it; it waits out the full
+timeout before falling back to the VIP it already had configured as `default`.
+
+Fix: `advertise-address: <API_LB_IP>` appended to the CP's `config.yaml` in
+`preK3sCommands`, so the supervisor advertises the VIP every VM already reaches.
+Applied to `target-cluster-warm.yaml`, `target-cluster-warm.tmpl.yaml`, and
+`target-cluster-parallel.yaml`.
+
+| | baseline | fixed |
+|---|---|---|
+| median time-to-ready | 50.0s | **42.7s** |
+| runs | 52.7 / 50.0 / 46.6 | 42.7 / 42.8 / 41.2 |
+| run-to-run spread | 6.1s | **1.6s** |
+| dial timeouts per run | 4-6 | **0** |
+| worker join after API ready | 11.8s | 5.1s |
+
+The spread collapsing from 6.1s to 1.6s matters as much as the median: the 10s timeout
+was also the dominant source of run-to-run variance. Verified safe — the `kubernetes`
+service endpoint becomes the VIP and a pod in the target cluster still reaches
+`kubernetes.default` (200).
+
+Two false starts on the way, both worth recording. The dials were *first* seen failing
+with `no route to host`, because bridge binding also hands the guest the pod CIDR as an
+on-link /24 so it ARPs for a pod IP that is L3-routed. Routing that subnet via the
+gateway removed the ARP failure — and bought nothing, because the dial then simply
+blackholed for the same 10s. And the gap measured 10.019s / 10.017s across runs with
+completely different dial behaviour, which looked like proof of a fixed timer unrelated
+to the dials; it was actually the dial timeout itself, reached by two different routes.
+
+### FIXED: the 8s containerDisk phase — 42.7s -> 34.5s
+
+KubeVirt gives its per-VM support containers microscopic CPU limits by default:
+
+| container | image | cpu limit | start |
+|---|---|---|---|
+| `guest-console-log` (virt-tail) | virt-launcher | **15m** | +3.0s |
+| `volumesystemdisk` (containerDisk) | noble-k3s 1.17GB | **10m** | +9.0s |
+| `compute` (virt-launcher) | virt-launcher | *(none)* | +9.0s |
+
+`10m` is 1% of a core: the CFS quota grants ~1ms per 100ms period, so even
+`container-disk --no-op` needs dozens of periods just to dynamically link and fault
+in its pages. Deterministic 8.0s on every VM, every start.
+
+Isolated by elimination — each of these was measured and ruled out first:
+
+| hypothesis | test | result |
+|---|---|---|
+| image size (1.17GB) | mount same image as an *image volume* | container started **+0.0s** |
+| concurrency/contention | solo VMI, nothing else starting | **9.0s** — worse than 8.0s |
+| node CRI latency | trivial 2-container pod | **1.0s** total |
+| image-volume mounting | as above | fast |
+
+The tell was that the cost is *deterministic* (8.0s every run) — the signature of a
+quota, not of load. Fix: `supportContainerResources` on the KubeVirt CR, applied by
+`scripts/configure-kubevirt-perf.sh` (`make kubevirt-perf`, and auto-run from
+`02-capi-init/init-management-cluster.sh` so it survives a rebuild). The limits are a
+ceiling, not a reservation — these containers are idle after startup.
+
+| | before | after |
+|---|---|---|
+| containerDisk phase | 8.0s | **1.0s** |
+| pod → qemu running | 10.0s | 4.0s |
+| median time-to-ready | 42.7s | **34.5s** |
+| runs | 42.7 / 42.8 / 41.2 | 34.5 / 34.2 / 34.7 |
+| spread | 1.6s | **0.5s** |
+
+### Where the two fixes leave things
+
+```
+baseline                 50.0s   (52.7 / 50.0 / 46.6, spread 6.1s)
++ advertise-address      42.7s   (42.7 / 42.8 / 41.2, spread 1.6s)
++ supportContainerRes    34.5s   (34.5 / 34.2 / 34.7, spread 0.5s)
+                       ────────
+                        -15.5s   (-31%), gate was <40s
+```
+
+Both fixes are one-line configuration, not architecture. Neither is an image change —
+which is the running theme of this document: every attempt to make the *image* smarter
+(`:preinit`, `:warm`) failed, while the two things that worked were a bad advertised
+address and a CPU quota. The spread collapsing 6.1s → 0.5s is worth as much as the
+median: the pipeline is now predictable enough that a 1s regression is visible.
+
+### What is actually left, by measured size
+
+0. ~~10s kubelet gap~~ and ~~8s containerDisk~~ — **both fixed above.**
+1. **~6s CAPI controller chain before the guest boots** (apply → VMI created).
+   Untouched by any image or guest work.
+2. **~10s silent gap inside kubelet startup on the worker** — the single largest
+   in-guest item, and completely opaque so far.
+3. **7s CP k3s → API ready.**
+4. **5.5s systemd + cloud-init.** Note this is the phase a systemd-less image would
+   attack; a perfect result there is worth ~3s, so it is the *fourth* lever, not the
+   first.
+
+### Measurement caveat that limits all of the above
+
+Run-to-run spread on this host is **~6s** (baseline 46.6–52.7). With N=3 that swamps
+any lever smaller than ~5s. Anything finer needs N≥7, or a quiet host, or both.

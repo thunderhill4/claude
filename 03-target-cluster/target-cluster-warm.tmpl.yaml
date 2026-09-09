@@ -77,6 +77,16 @@ spec:
       - mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
       - sed -i '/cluster-init/d' /etc/rancher/k3s/config.yaml
       - rm -f /var/lib/rancher/k3s/server/manifests/etcd-proxy.yaml
+      # Advertise the API VIP, not this VM's pod IP. KubeVirt bridge binding
+      # gives the VM the launcher pod's address, and that address is reachable
+      # from the NODE but NOT from other pods (measured: node->VM:6443 = 200 in
+      # 0.3ms, pod->VM:6443 = timeout). The worker's k3s agent is itself a pod,
+      # so when the supervisor hands it the CP's pod IP it dials an address it
+      # can never reach and eats the full 10.000s dial timeout — the kubelet
+      # does not start until that expires (measured 10.019s / 10.017s / 10.000s
+      # across runs). Advertising the VIP, which every VM already reaches, makes
+      # that first dial succeed. Must run after KThrees writes config.yaml.
+      - "echo 'advertise-address: {{API_LB_IP}}' >> /etc/rancher/k3s/config.yaml"
     postK3sCommands:
       # Reap the bake VM's leftover Node object (carried in the warm SQLite state)
       # once the API is up. Must come first — see target-cluster-warm.yaml note.
@@ -152,7 +162,13 @@ stringData:
 
     runcmd:
       - "mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys"
-      - INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC='agent' sh /opt/install.sh && mkdir -p /run/cluster-api && echo success > /run/cluster-api/bootstrap-success.complete
+      # `agent` MUST be positional: the baked /opt/install.sh parses only
+      # positional args and ignores INSTALL_K3S_EXEC, so without it the worker
+      # starts the k3s SERVER unit, which fails ~0.8s later and — because
+      # install.sh runs under `set -e` — aborts the script before it can write
+      # the bootstrap-success sentinel. The env var is kept for the legacy
+      # KThrees-generated path; the positional arg is what actually takes effect.
+      - INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC='agent' sh /opt/install.sh agent && mkdir -p /run/cluster-api && echo success > /run/cluster-api/bootstrap-success.complete
       - "systemctl daemon-reload && systemctl enable k3s-agent && systemctl start k3s-agent"
 ---
 apiVersion: cluster.x-k8s.io/v1beta1

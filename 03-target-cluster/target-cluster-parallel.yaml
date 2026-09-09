@@ -87,6 +87,11 @@ spec:
       tlsSan:
         - 172.18.255.215
     preK3sCommands:
+      # Advertise the API VIP, not this VM's pod IP — a KubeVirt VM's pod address
+      # is reachable from the node but NOT from other pods, and the worker's k3s
+      # agent is itself a pod, so it burns a full 10.000s dial timeout (blocking
+      # kubelet start) before falling back to the VIP. See target-cluster-warm.yaml.
+      - "echo 'advertise-address: 172.18.255.215' >> /etc/rancher/k3s/config.yaml"
       - mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys
     postK3sCommands:
       - systemctl daemon-reload && systemctl enable k3s && systemctl start k3s
@@ -161,7 +166,7 @@ stringData:
 
     runcmd:
       - "mkdir -p /home/ubuntu/.ssh && echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCoeg4clbqLvjstCxtDiDm2hJymy5EeT75HsTMBguKHKPAWcYJDqhakiFF/cxhBoDTLOv6OpfDzCeRoxy0BLFJjQdVNwe7tDl51w+lGG+UR48xATIEEfGxyw8wCjZvML5BnVwdDGyQKFJijZqTlf51hY1FS9x7jg4pVGgNPhf815JHTRsEmzVFgAFK+C5YVl0EYCfII9qpDR7EPECoZngZ5SaMTHLYOVxYBnqrPovuzHD04iemnIuDQKLy4hBYzFMygKkbiKNOYUsuoSsubhtYCtj5KzmV+DpSSIG9YCPC53mjxJ7QiS5/QV9aBEM/0qfVb0aXGhQdjlQ1NoGjeNAMDYsRKDoFNESwYhS39AnXr/ke9nk+4kS0SPYIGqsOMrffJ2e4qzuHOsVjzhCe6rsEwoUufmgzseE+RPVFNxu948cBG6haJde6uqMXe2eq1tKvczYCS9sN8bM8Pb/SmEJDFy7S5I4oaZvsxzotwEEEmgZ+cP92sBZeZefY8LTUmfB0= mahipal' > /home/ubuntu/.ssh/authorized_keys && chown -R ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh && chmod 600 /home/ubuntu/.ssh/authorized_keys"
-      - INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC='agent' sh /opt/install.sh && mkdir -p /run/cluster-api && echo success > /run/cluster-api/bootstrap-success.complete
+      - INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_EXEC='agent' sh /opt/install.sh agent && mkdir -p /run/cluster-api && echo success > /run/cluster-api/bootstrap-success.complete
       - "systemctl daemon-reload && systemctl enable k3s-agent && systemctl start k3s-agent"
 ---
 apiVersion: cluster.x-k8s.io/v1beta1

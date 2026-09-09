@@ -1,4 +1,4 @@
-.PHONY: all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full target-cluster-parallel target-cluster-preinit target-cluster-lite-preinit target-cluster-full-preinit target-cluster-lite-minimal target-cluster-full-minimal verify clean ui ui-build registry bake-image bake-image-preinit bake-image-minimal-preinit build-containerdisk-preinit build-containerdisk-minimal-preinit demo help registry-fix pre-pull pre-pull-preinit pre-pull-minimal-preinit bake-image-warm build-containerdisk-warm pre-pull-warm ensure-warm-image target-cluster-warm time-to-ready time-to-ready-warm istio security-agent security-agent-build security-policies security-deploy sympozium-install sympozium-lb sympozium-pack-install sympozium-pack-uninstall sympozium-demo-agents sympozium-warm sympozium-demo sympozium-demo-clean sympozium-fix-node-probe sympozium-fix-llmfit-gpu
+.PHONY: kubevirt-perf phase-timings all prereqs metallb capi-init target-cluster target-cluster-lite target-cluster-full target-cluster-parallel target-cluster-preinit target-cluster-lite-preinit target-cluster-full-preinit target-cluster-lite-minimal target-cluster-full-minimal verify clean ui ui-build registry bake-image bake-image-preinit bake-image-minimal-preinit build-containerdisk-preinit build-containerdisk-minimal-preinit demo help registry-fix pre-pull pre-pull-preinit pre-pull-minimal-preinit bake-image-warm build-containerdisk-warm pre-pull-warm ensure-warm-image target-cluster-warm time-to-ready time-to-ready-warm istio security-agent security-agent-build security-policies security-deploy sympozium-install sympozium-lb sympozium-pack-install sympozium-pack-uninstall sympozium-demo-agents sympozium-warm sympozium-demo sympozium-demo-clean sympozium-fix-node-probe sympozium-fix-llmfit-gpu
 
 REGISTRY_URL := 172.18.0.2:5000
 CONTAINER_IMAGE := $(REGISTRY_URL)/ubuntu-noble-k3s:latest
@@ -111,6 +111,12 @@ target-cluster-lite-minimal:
 
 target-cluster-full-minimal:
 	PROFILE=full IMAGE_VARIANT=minimal ./scripts/render-cluster.sh | kubectl apply -f -
+
+kubevirt-perf: ## Raise KubeVirt support-container CPU limits (containerDisk start 8s -> 1s)
+	./scripts/configure-kubevirt-perf.sh
+
+phase-timings: ## Per-phase breakdown of target-cluster time-to-ready (READ-ONLY collectors)
+	./scripts/phase-timings.sh $(ARGS)
 
 verify:
 	bash 04-verify/verify-cluster.sh
